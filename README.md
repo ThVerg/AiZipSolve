@@ -71,6 +71,19 @@ python -m zipsolve.rl.train --init checkpoints/imit.pt --minutes 60 --run-name f
 python -m zipsolve.rl.benchmark run --ckpt checkpoints/ft_best.pt --set val
 ```
 
+## Dataset
+
+**[FAVERG/zip-puzzles](https://huggingface.co/datasets/FAVERG/zip-puzzles)** on Hugging Face:
+990k solvable puzzles with solutions across every family (2D 4–12, walls, masks, organic islands,
+3D up to 6³, 4D up to 4⁴), with exact-solver difficulty stats and train / validation / test splits.
+
+```python
+from datasets import load_dataset
+ds = load_dataset("FAVERG/zip-puzzles", "islands")
+```
+
+Rebuild it with `python scripts/build_hf_dataset.py --n 1000000 --workers 48`.
+
 ## Tests
 
 ```bash
