@@ -76,3 +76,7 @@ python -m zipsolve.rl.benchmark run --ckpt checkpoints/ft_best.pt --set val
 ```bash
 pip install -e ".[dev]" && pytest -q
 ```
+
+## License
+
+MIT — see [LICENSE](LICENSE).

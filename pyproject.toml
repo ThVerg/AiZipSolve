@@ -2,6 +2,7 @@
 name = "zipsolve"
 version = "0.1.0"
 description = "Zip puzzles (LinkedIn-style) on arbitrary graphs: 2D, walls, islands, 3D, 4D, with RL agents"
+license = "MIT"
 requires-python = ">=3.11"
 dependencies = ["numpy", "networkx", "matplotlib", "gymnasium", "torch", "fastapi", "uvicorn"]
 
