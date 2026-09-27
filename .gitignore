@@ -1,0 +1,18 @@
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+*.egg-info/
+
+# training artefacts (regenerable); one small pretrained model is shipped
+/runs/
+/outputs/
+/data/
+checkpoints/*
+!checkpoints/zip_gnn_small.pt
+*.pt
+!checkpoints/zip_gnn_small.pt
+
+# user content / local state
+puzzles/custom/
+.sync.json

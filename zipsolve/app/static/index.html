@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#f7f1e8">
+  <title>Zip</title>
+  <script>
+    // old power-user links: /?model=<name> (dashboard) and #kind=… with advanced options live in the AI Lab
+    (function () {
+      try {
+        if (new URLSearchParams(location.search).has("model")) { location.replace("/lab" + location.search + location.hash); return; }
+        var h = new URLSearchParams(location.hash.slice(1)), k = h.get("kind");
+        if (k) {
+          var adv = !/^(grid2d|walls|islands|grid3d)$/.test(k) || h.has("cp") || [].some.call(Array.from(h.keys()), function (x) { return x.indexOf("opt.") === 0; });
+          if (adv) location.replace("/lab" + location.hash);
+        }
+      } catch (e) { /* ignore */ }
+    })();
+  </script>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g'%3E%3Cstop offset='0' stop-color='%23ff9f1c'/%3E%3Cstop offset='.5' stop-color='%23d63a8f'/%3E%3Cstop offset='1' stop-color='%232f6fe0'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='8' fill='url(%23g)'/%3E%3Cpath d='M9 10h14L9 22h14' stroke='white' stroke-width='3.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <script src="/static/theme.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Nunito:wght@500;700;800&display=swap">
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/game.css">
+  <script type="importmap">
+  { "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  } }
+  </script>
+</head>
+<body class="gp screen-home">
+<a class="skip-link" href="#main">Skip to content</a>
+<div class="bg-blobs" aria-hidden="true"><i></i><i></i><i></i></div>
+
+<!-- glow filter for the path ribbon (referenced from game.css) -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <filter id="zipGlow" x="-20%" y="-20%" width="140%" height="140%" color-interpolation-filters="sRGB">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="5" result="b"/>
+      <feColorMatrix in="b" type="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 .75 0" result="bb"/>
+      <feMerge><feMergeNode in="bb"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+</svg>
+
+<header class="gbar" id="gbar">
+  <!-- home -->
+  <a class="brand home-only" href="/" aria-label="Zip home">
+    <span class="logo" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M9 10h14L9 22h14" stroke="white" stroke-width="3.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+    <span class="brand-name">Zip</span>
+  </a>
+  <!-- game -->
+  <button class="round-ic game-only" id="backBtn" type="button" aria-label="Back to menu"></button>
+  <div class="gtitle game-only" aria-live="polite"><b id="gTitle">Zip</b><span id="gSub"></span></div>
+  <div class="spacer"></div>
+  <div class="timer game-only" id="timer" aria-label="Time"><span class="mono" id="tTime">0:00</span></div>
+  <button class="round-ic home-only" id="soundBtn" type="button" aria-label="Mute sounds"></button>
+  <button class="round-ic home-only" data-theme-toggle type="button" aria-label="Toggle theme"></button>
+  <button class="round-ic" id="menuBtn" type="button" aria-label="Menu" aria-haspopup="true" aria-expanded="false" aria-controls="menu"></button>
+  <div class="gprogress game-only" aria-hidden="true"><i id="gProg"></i></div>
+</header>
+
+<nav class="menu" id="menu" aria-label="Menu" hidden>
+  <button type="button" class="mi" data-act="howto"><span class="mi-ic">👋</span>How to play</button>
+  <button type="button" class="mi" data-act="sound"><span class="mi-ic" id="miSoundIc">🔊</span><span id="miSoundTxt">Sound on</span></button>
+  <button type="button" class="mi" data-act="theme"><span class="mi-ic">🌗</span>Light / dark</button>
+  <hr>
+  <a class="mi" href="/editor"><span class="mi-ic">✏️</span>Puzzle editor</a>
+  <a class="mi" href="/lab" id="labLink"><span class="mi-ic">🧪</span>AI Lab</a>
+  <a class="mi" href="/dashboard"><span class="mi-ic">📈</span>Training dashboard</a>
+</nav>
+
+<main id="main">
+  <!-- ======================================================== HOME -->
+  <section class="home" id="home" aria-label="Home">
+    <div class="hello" id="hello">Hi there 👋</div>
+
+    <article class="hero" id="hero">
+      <div class="hero-txt">
+        <div class="hero-kick">Today's Zip <span class="streak" id="streak" hidden></span></div>
+        <h1 class="hero-title" id="heroTitle">#270</h1>
+        <p class="hero-sub" id="heroSub">One line. Every square. Go!</p>
+        <button class="play-btn" id="heroPlay" type="button"><span class="pb-ic" aria-hidden="true">▶</span><span id="heroPlayTxt">Play</span></button>
+      </div>
+      <div class="hero-art" aria-hidden="true">
+        <svg viewBox="0 0 120 120" class="hero-svg">
+          <defs><linearGradient id="hg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#fff" stop-opacity=".85"/></linearGradient></defs>
+          <g class="hero-cells"></g>
+          <path class="hero-path" d="M18 18 H102 V46 H18 V74 H102 V102 H18" pathLength="1"/>
+          <g class="hero-dots"></g>
+        </svg>
+      </div>
+    </article>
+
+    <h2 class="sect">Pick a mode</h2>
+    <div class="modes" id="modes">
+      <article class="mode m-classic" data-mode="classic">
+        <button class="mode-hit" type="button" data-play="classic" aria-label="Play Classic"></button>
+        <div class="mode-art" data-art="classic" aria-hidden="true"></div>
+        <div class="mode-txt">
+          <h3>Classic</h3>
+          <p>The pure puzzle.</p>
+        </div>
+        <div class="diffs" role="group" aria-label="Classic difficulty">
+          <button type="button" class="diff" data-play="classic" data-diff="easy">Easy</button>
+          <button type="button" class="diff" data-play="classic" data-diff="medium">Medium</button>
+          <button type="button" class="diff" data-play="classic" data-diff="hard">Hard</button>
+        </div>
+      </article>
+      <article class="mode m-walls" data-mode="walls">
+        <button class="mode-hit" type="button" data-play="walls" aria-label="Play Walls"></button>
+        <div class="mode-art" data-art="walls" aria-hidden="true"></div>
+        <div class="mode-txt"><h3>Walls</h3><p>Some doors are shut.</p></div>
+      </article>
+      <article class="mode m-islands" data-mode="islands">
+        <button class="mode-hit" type="button" data-play="islands" aria-label="Play Islands"></button>
+        <div class="mode-art" data-art="islands" aria-hidden="true"></div>
+        <div class="mode-txt"><h3>Islands</h3><p>Hop the bridges.</p></div>
+      </article>
+      <article class="mode m-cube" data-mode="cube">
+        <button class="mode-hit" type="button" data-play="cube" aria-label="Play 3D Cube"></button>
+        <div class="mode-art" data-art="cube" aria-hidden="true"></div>
+        <div class="mode-txt"><h3>3D Cube</h3><p>Think in layers.</p></div>
+      </article>
+      <article class="mode m-race" data-mode="race">
+        <button class="mode-hit" type="button" data-play="race" aria-label="Race the robot"></button>
+        <div class="mode-art" data-art="race" aria-hidden="true"></div>
+        <div class="mode-txt"><h3>Race the robot</h3><p>Same puzzle. Who's faster?</p></div>
+      </article>
+    </div>
+  </section>
+
+  <!-- ======================================================== RACE: pick a rival -->
+  <section class="rivals" id="rivals" aria-label="Pick a rival" hidden>
+    <h1 class="rivals-title">Pick your rival</h1>
+    <p class="rivals-sub">Same puzzle, same clock. First to fill the board wins.</p>
+    <div class="rival-list" id="rivalList"></div>
+  </section>
+
+  <!-- ======================================================== GAME -->
+  <section class="game" id="game" aria-label="Puzzle" hidden>
+    <div class="race-strip" id="raceStrip" hidden>
+      <div class="bot" id="bot"><span class="bot-av" id="botAv">🐣</span><span class="bot-say" id="botSay">ready!</span></div>
+      <div class="bot-board" id="botBoard"></div>
+      <div class="bot-prog"><i id="botProg"></i></div>
+    </div>
+    <div class="view-seg" id="viewSeg" hidden role="group" aria-label="View">
+      <button type="button" data-v="flat" class="on">Layers</button>
+      <button type="button" data-v="3d">3D</button>
+    </div>
+    <div class="board-wrap" id="boardWrap">
+      <div class="board-host" id="boardHost"></div>
+      <div class="v3-host" id="v3Host" hidden></div>
+    </div>
+    <div class="coach" id="coach" role="status" aria-live="polite"></div>
+    <div class="ctrls" id="ctrls">
+      <button class="cbtn" id="undoBtn" type="button" aria-label="Undo (Z)"><span class="cb-ic"></span><span class="cb-l">Undo</span></button>
+      <button class="cbtn" id="hintBtn" type="button" aria-label="Hint (H)"><span class="cb-ic"></span><span class="cb-l">Hint</span></button>
+      <button class="cbtn" id="restartBtn" type="button" aria-label="Restart (R)"><span class="cb-ic"></span><span class="cb-l">Restart</span></button>
+    </div>
+    <button class="showme" id="showMeBtn" type="button">Show me <span aria-hidden="true">🤖</span></button>
+  </section>
+</main>
+
+<!-- result sheet (win / assisted / race) -->
+<div class="sheet-bg" id="sheet" role="dialog" aria-modal="true" aria-labelledby="shTitle" hidden>
+  <div class="sheet">
+    <div class="sh-badge" id="shBadge">🎉</div>
+    <div class="sh-kick" id="shKick"></div>
+    <h2 class="sh-title" id="shTitle">Nice!</h2>
+    <div class="sh-time mono" id="shTime">0:00</div>
+    <div class="sh-row" id="shRow"></div>
+    <div class="sh-btns">
+      <button class="play-btn dark" id="shPrimary" type="button">Next puzzle</button>
+      <div class="sh-2">
+        <button class="soft-btn" id="shShare" type="button">Share</button>
+        <button class="soft-btn" id="shAlt" type="button" hidden>Try again</button>
+        <button class="soft-btn" id="shMenu" type="button">Menu</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- tutorial -->
+<div class="sheet-bg" id="tut" role="dialog" aria-modal="true" aria-labelledby="tutTitle" hidden>
+  <div class="sheet tut">
+    <button class="skip" id="tutSkip" type="button">Skip</button>
+    <div class="tut-dots" aria-hidden="true"><i></i><i></i><i></i></div>
+    <h2 class="sh-title" id="tutTitle">Welcome to Zip!</h2>
+    <p class="tut-txt" id="tutTxt">Draw one line through the numbers, in order.</p>
+    <div class="tut-board" id="tutBoard"><div id="tutHost"></div><div class="tut-finger" id="tutFinger" aria-hidden="true">👆</div></div>
+    <div class="sh-btns"><button class="play-btn dark" id="tutNext" type="button">Your turn</button></div>
+  </div>
+</div>
+
+<div class="countdown g-count" id="countdown" aria-live="assertive"></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<canvas id="fx" aria-hidden="true"></canvas>
+<script type="module" src="/static/game.js"></script>
+</body>
+</html>

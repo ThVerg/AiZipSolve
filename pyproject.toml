@@ -1,0 +1,23 @@
+[project]
+name = "zipsolve"
+version = "0.1.0"
+description = "Zip puzzles (LinkedIn-style) on arbitrary graphs: 2D, walls, islands, 3D, 4D, with RL agents"
+requires-python = ">=3.11"
+dependencies = ["numpy", "networkx", "matplotlib", "gymnasium", "torch", "fastapi", "uvicorn"]
+
+[project.optional-dependencies]
+dev = ["pytest", "httpx"]
+screenshots = ["playwright"]
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["zipsolve*"]
+
+[tool.setuptools.package-data]
+"zipsolve.app" = ["static/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

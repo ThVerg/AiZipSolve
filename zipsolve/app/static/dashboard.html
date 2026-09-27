@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Training Dashboard</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g'%3E%3Cstop offset='0' stop-color='%23ff9f1c'/%3E%3Cstop offset='.5' stop-color='%23d63a8f'/%3E%3Cstop offset='1' stop-color='%232f6fe0'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='8' fill='url(%23g)'/%3E%3Cpath d='M9 10h14L9 22h14' stroke='white' stroke-width='3.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <script>
+    try { const t = localStorage.getItem("zip-theme"); if (t) document.documentElement.dataset.theme = t; } catch { /* ignore */ }
+  </script>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.min.css">
+  <link rel="stylesheet" href="/static/dashboard.css">
+  <script src="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.iife.min.js"></script>
+</head>
+<body class="dash-page">
+<header class="topbar">
+  <div class="logo">Z</div>
+  <div class="brand">
+    <h1>Zip Solver</h1>
+    <p>Training dashboard: PPO runs, validation and benchmarks</p>
+  </div>
+  <nav class="topnav" aria-label="Main">
+    <a href="/">Play</a>
+    <a href="/lab">AI Lab</a>
+    <a href="/editor">Editor</a>
+    <a href="/dashboard" class="active" aria-current="page">Dashboard</a>
+  </nav>
+  <div class="spacer"></div>
+  <button class="icon-btn" id="themeBtn" title="Toggle light / dark">Theme</button>
+</header>
+
+<main class="dash">
+  <!-- one filter / control row that scopes the page -->
+  <section class="dash-toolbar card" aria-label="Data controls">
+    <div class="tb-group">
+      <button class="btn primary" id="syncBtn" title="Pull runs + checkpoints from the training server">
+        <svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 0 1-9.6 3.7M2.5 8a5.5 5.5 0 0 1 9.6-3.7M12.3 1.5v2.9H9.4M3.7 14.5v-2.9h2.9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span id="syncLabel">Sync</span>
+      </button>
+      <div class="tb-status" id="syncStatus" aria-live="polite">—</div>
+    </div>
+    <div class="tb-group tb-right">
+      <label class="tb-field">Auto-sync
+        <select id="autoSync">
+          <option value="0">Off</option><option value="2">2 min</option><option value="5">5 min</option>
+          <option value="10">10 min</option><option value="30">30 min</option>
+        </select>
+      </label>
+      <label class="tb-field">Refresh
+        <select id="autoRefresh">
+          <option value="0">Off</option><option value="10">10 s</option><option value="30">30 s</option>
+          <option value="60">1 min</option><option value="300">5 min</option>
+        </select>
+      </label>
+      <span class="muted" id="refreshStatus"></span>
+    </div>
+  </section>
+
+  <section class="dash-section" aria-labelledby="runsH">
+    <div class="sec-head">
+      <h2 id="runsH">Runs</h2>
+      <span class="muted">Click a card to add or remove it from the charts (up to 8).</span>
+    </div>
+    <div class="run-grid" id="runCards"><div class="empty">Loading runs…</div></div>
+  </section>
+
+  <section class="dash-section" aria-labelledby="curvesH">
+    <div class="sec-head">
+      <h2 id="curvesH">Training curves</h2>
+      <span class="muted">Drag on a chart to zoom, double-click to reset.</span>
+    </div>
+    <div class="chart-controls card">
+      <div class="cc-item">
+        <span class="cc-label">X axis</span>
+        <div class="seg" id="xAxis" role="group" aria-label="X axis">
+          <button data-x="iter" class="on">Iterations</button>
+          <button data-x="step">Env steps</button>
+          <button data-x="time">Wall time</button>
+        </div>
+      </div>
+      <div class="cc-item cc-smooth">
+        <label class="cc-label" for="smooth">Smoothing <b id="smoothVal">0.80</b></label>
+        <input type="range" id="smooth" min="0" max="0.98" step="0.01" value="0.8">
+      </div>
+      <div class="cc-item cc-checks">
+        <label class="check"><input type="checkbox" id="showRaw" checked> Raw values</label>
+        <label class="check"><input type="checkbox" id="showStages" checked> Stage changes</label>
+      </div>
+      <div class="cc-item cc-more">
+        <label class="cc-label" for="moreMetric">Add chart</label>
+        <select id="moreMetric"><option value="">More metrics…</option></select>
+      </div>
+    </div>
+    <div class="dash-legend" id="legend" aria-label="Runs shown"></div>
+    <div class="chart-grid" id="charts"></div>
+
+    <div class="sub-head">
+      <h3>Solve rate by puzzle family</h3>
+      <div class="seg seg-inline" id="famSource" role="group" aria-label="Family data source">
+        <button data-src="val_greedy" class="on">Validation · greedy</button>
+        <button data-src="val_sampled">Validation · sampled</button>
+        <button data-src="train">Training (rolling)</button>
+      </div>
+    </div>
+    <div class="fam-grid" id="famCharts"></div>
+
+    <details class="card log-card" id="logCard">
+      <summary><span>Log tail</span> <span class="muted" id="logName"></span></summary>
+      <div class="log-tools"><select id="logRun" aria-label="Run"></select></div>
+      <pre id="logText" class="log-text"></pre>
+    </details>
+  </section>
+
+  <section class="dash-section" aria-labelledby="benchH">
+    <div class="sec-head">
+      <h2 id="benchH">Benchmarks</h2>
+      <span class="muted" id="benchMeta"></span>
+    </div>
+    <div class="card bench-card">
+      <div class="bench-tools">
+        <label class="tb-field">Report <select id="benchReport"></select></label>
+        <label class="tb-field">Cell metric
+          <select id="benchMetric">
+            <option value="solve_rate">Solve rate</option>
+            <option value="median_ms">Median latency (ms)</option>
+            <option value="p90_ms">p90 latency (ms)</option>
+            <option value="mean_expansions">Mean expansions</option>
+            <option value="mean_nn_calls">Mean NN calls</option>
+          </select>
+        </label>
+        <span class="scale-key" id="benchKey"></span>
+      </div>
+      <h3 class="tbl-title">Overall</h3>
+      <div class="tbl-wrap" id="benchOverall"></div>
+      <h3 class="tbl-title">By family</h3>
+      <div class="tbl-wrap" id="benchFamily"></div>
+      <h3 class="tbl-title">By checkpoint density</h3>
+      <div class="tbl-wrap" id="benchDensity"></div>
+    </div>
+
+    <div class="card bench-card">
+      <h3 class="tbl-title first">Compare two checkpoints / methods</h3>
+      <div class="bench-tools">
+        <label class="tb-field">A <select id="cmpA"></select></label>
+        <label class="tb-field">B <select id="cmpB"></select></label>
+        <span class="scale-key" id="cmpKey"></span>
+      </div>
+      <div class="tbl-wrap" id="cmpTable"></div>
+    </div>
+  </section>
+
+  <section class="dash-section" aria-labelledby="evalH">
+    <div class="sec-head"><h2 id="evalH">Evaluations</h2><span class="muted">runs/eval/*.json (evaluate.py)</span></div>
+    <div class="card"><div class="tbl-wrap" id="evalTable"></div></div>
+  </section>
+
+  <section class="dash-section" aria-labelledby="ckptH">
+    <div class="sec-head">
+      <h2 id="ckptH">Checkpoints</h2>
+      <span class="muted">Details load on demand from each .pt file.</span>
+    </div>
+    <div class="card">
+      <div class="bench-tools">
+        <label class="tb-field grow">Filter <input type="text" id="ckptFilter" placeholder="run, stage, source…"></label>
+        <label class="check"><input type="checkbox" id="ckptSelected"> Only runs shown in the charts</label>
+      </div>
+      <div class="tbl-wrap" id="ckptTable"></div>
+    </div>
+  </section>
+</main>
+
+<div class="dash-tip" id="tip" role="status" hidden></div>
+<script src="/static/dashboard.js"></script>
+</body>
+</html>
