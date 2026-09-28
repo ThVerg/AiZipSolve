@@ -259,6 +259,7 @@ export function initAI(ctx) {
     };
     let lastPaint = 0;
     const apply = (ev) => {
+      if (ev && typeof ev === "object") { if (ev.t === "path" && Array.isArray(ev.p)) stack = ev.p.slice(); return; }   // robot captions / trees: not drawn here
       if (ev === "R") { stack = []; attempts++; return; }
       if (ev >= 0) { stack.push(ev); pushes++; if (stack.length > maxDepth) maxDepth = stack.length; return; }
       for (let k = 0; k < -ev && stack.length; k++) { const v = stack.pop(); S.tried[v] = 1; pops++; }
@@ -470,6 +471,7 @@ export function initAI(ctx) {
     if (o.mode === "search" && res.trace) {
       let stack = [];
       for (const ev of res.trace) {
+        if (ev && typeof ev === "object") { if (ev.t === "path" && Array.isArray(ev.p)) { stack = ev.p.slice(); events.push({ path: stack.slice(), dt: pace }); } continue; }
         if (ev === "R") { stack = []; continue; }
         if (ev >= 0) { stack.push(ev); if (stack.length > 1) events.push({ path: stack.slice(), dt: pace }); }
         else { const popped = stack.splice(stack.length + ev); events.push({ path: stack.slice(), dt: pace * 0.6, popped }); }

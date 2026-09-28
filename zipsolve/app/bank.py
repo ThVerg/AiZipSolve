@@ -85,6 +85,22 @@ class Bank:
             return None
         return rec[slot], int(rec.get("number", (day - lo).days + 1))
 
+    def weekly(self, week: str) -> tuple[dict, str] | None:
+        """(entry, bank week key) of the Architect's weekly challenge; weeks outside the file wrap around."""
+        wk = self._load("architect/weekly.json")
+        if not isinstance(wk, dict) or not wk:
+            return None
+        if week in wk:
+            return wk[week], week
+        keys = sorted(wk)
+        try:
+            y, w = week.split("-W")
+            k = int(y) * 53 + int(w)
+        except ValueError:
+            return None
+        key = keys[k % len(keys)]
+        return wk[key], key
+
 
 def seed_of(entry: dict) -> int:
     """A stable integer for a bank entry (its id's hex digits)."""

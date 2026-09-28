@@ -68,8 +68,152 @@
     "file": "pools/cube-hard.json",
     "count": 80
    }
+  },
+  "architect": {
+   "expert": {
+    "file": "pools/architect-expert.json",
+    "count": 60
+   },
+   "insane": {
+    "file": "pools/architect-insane.json",
+    "count": 40
+   }
+  },
+  "portals": {
+   "medium": {
+    "file": "pools/portals-medium.json",
+    "count": 50
+   },
+   "hard": {
+    "file": "pools/portals-hard.json",
+    "count": 40
+   }
+  },
+  "torus": {
+   "medium": {
+    "file": "pools/torus-medium.json",
+    "count": 50
+   },
+   "hard": {
+    "file": "pools/torus-hard.json",
+    "count": 40
+   }
+  },
+  "hex": {
+   "medium": {
+    "file": "pools/hex-medium.json",
+    "count": 50
+   },
+   "hard": {
+    "file": "pools/hex-hard.json",
+    "count": 40
+   }
+  },
+  "tri": {
+   "medium": {
+    "file": "pools/tri-medium.json",
+    "count": 50
+   },
+   "hard": {
+    "file": "pools/tri-hard.json",
+    "count": 40
+   }
+  },
+  "oneway": {
+   "medium": {
+    "file": "pools/oneway-medium.json",
+    "count": 50
+   },
+   "hard": {
+    "file": "pools/oneway-hard.json",
+    "count": 40
+   }
+  },
+  "overpass": {
+   "medium": {
+    "file": "pools/overpass-medium.json",
+    "count": 50
+   },
+   "hard": {
+    "file": "pools/overpass-hard.json",
+    "count": 40
+   }
+  },
+  "keys": {
+   "medium": {
+    "file": "pools/keys-medium.json",
+    "count": 50
+   },
+   "hard": {
+    "file": "pools/keys-hard.json",
+    "count": 40
+   }
+  },
+  "cubesurf": {
+   "medium": {
+    "file": "pools/cubesurf-medium.json",
+    "count": 50
+   },
+   "hard": {
+    "file": "pools/cubesurf-hard.json",
+    "count": 40
+   }
+  },
+  "coop": {
+   "medium": {
+    "file": "pools/coop-medium.json",
+    "count": 40
+   }
   }
  },
  "daily_files": "daily/{yyyy}-{mm}.json",
- "puzzles": 3254
+ "puzzles": 3254,
+ "architect": {
+  "pools": {
+   "expert": {
+    "file": "pools/architect-expert.json",
+    "count": 60
+   },
+   "insane": {
+    "file": "pools/architect-insane.json",
+    "count": 40
+   }
+  },
+  "weekly": {
+   "file": "architect/weekly.json",
+   "count": 105,
+   "first": "2026-W01",
+   "last": "2027-W52",
+   "key": "ISO week YYYY-Www"
+  },
+  "robots": "robots/{id}.json",
+  "puzzles": 205,
+  "generated": "2026-09-28T16:24:56+00:00"
+ },
+ "more_modes": {
+  "modes": [
+   "coop",
+   "cubesurf",
+   "hex",
+   "keys",
+   "oneway",
+   "overpass",
+   "portals",
+   "torus",
+   "tri"
+  ],
+  "puzzles": 760,
+  "robots": [
+   "rookie",
+   "scout",
+   "grandmaster",
+   "tortoise",
+   "detective",
+   "mcts",
+   "evolver",
+   "gambler",
+   "sat"
+  ],
+  "generated": "2026-09-28T16:42:50+00:00"
+ }
 }

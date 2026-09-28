@@ -98,6 +98,12 @@
       </div>
     </article>
 
+    <button class="weekly" id="weekly" type="button" hidden aria-label="Play this week's Architect challenge">
+      <span class="wk-av" aria-hidden="true">😈</span>
+      <span class="wk-txt"><b>This week's Architect challenge</b><span id="weeklySub">Designed by the AI</span></span>
+      <span class="wk-go" aria-hidden="true">›</span>
+    </button>
+
     <h2 class="sect">Pick a mode</h2>
     <div class="modes" id="modes">
       <article class="mode m-classic" data-mode="classic">
@@ -134,6 +140,9 @@
         <div class="mode-txt"><h3>Race the robot</h3><p>Same puzzle. Who's faster?</p></div>
       </article>
     </div>
+
+    <div class="more-head" id="moreHead"><h2 class="sect">More modes</h2><span class="new-pill">New</span></div>
+    <div class="more" id="more" role="list" aria-label="More modes"></div>
   </section>
 
   <!-- ======================================================== RACE: pick a rival -->
@@ -153,6 +162,10 @@
     <div class="view-seg" id="viewSeg" hidden role="group" aria-label="View">
       <button type="button" data-v="flat" class="on">Layers</button>
       <button type="button" data-v="3d">3D</button>
+    </div>
+    <div class="pen-seg" id="penSeg" hidden role="group" aria-label="Which line are you drawing?">
+      <button type="button" data-pen="0" class="on"><i class="pen-dot warm"></i>Player 1</button>
+      <button type="button" data-pen="1"><i class="pen-dot cool"></i>Player 2</button>
     </div>
     <div class="board-wrap" id="boardWrap">
       <div class="board-host" id="boardHost"></div>

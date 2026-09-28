@@ -16,10 +16,20 @@ Endpoints (JSON):
         budget); hybrid = exact solver + GNN move ordering (complete), with the plain
         exact solver's stats under "exact" when compare (default true).
     POST /api/hint         {puzzle, path, id?}
+    POST /api/hint/explain {puzzle, path, id?, time_limit?}  the Detective's teaching hint:
+                           {status: next|backtrack|done|invalid|timeout, move, reason, technique, cells, keep?}
+    GET  /api/robots       the strategy robots (zipsolve.robots) and whether each is available
+    POST /api/solve/robot  {puzzle, robot: detective|mcts|evolver|gambler|sat, time_limit?, trace?, seed?}
+                           same shape as /api/solve/rl + "robot", "stats"; extra trace event kinds
+                           {"t":"note"|"path"|"tree", ...} (see zipsolve.robots)
     POST /api/policy       {puzzle, path, model?, full?, check?}
         the GNN's view of a position: legal-move probabilities, value / "winnable"
         estimate, board-wide score heat, and the solver's completable verdict.
     GET  /api/presets      difficulty presets (easy .. insane)
+    POST /api/architect/design {kind: classic|walls|islands, size, target: expert|insane|hard, time_budget?,
+                           seed?, include_solution?}  😈 the Architect designs a unique, fair (no guessing)
+                           puzzle aimed at the target: {puzzle, rating, log: [{phase, msg}], stats, id, ...}
+    GET  /api/architect/weekly ?week=YYYY-Www  😈 the week's Architect challenge (bank/architect/weekly.json)
     GET  /api/daily        ?difficulty=&date=YYYY-MM-DD  deterministic daily puzzle: from the bank's
                            daily schedule (easy/medium/hard/special) when present, else generated
     ("trace": true on /api/solve/exact and /api/solve/rl search|hybrid returns the
@@ -33,6 +43,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import hashlib
+import json
 import os
 import secrets
 import time
@@ -60,11 +71,18 @@ ROOT = Path(__file__).resolve().parents[2]
 SIZE_LIMITS = {
     "grid2d": (2, 12, 7), "walls": (3, 12, 7), "islands": (2, 8, 3), "mask": (4, 12, 8),
     "grid3d": (2, 6, 4), "grid4d": (2, 4, 3), "grid": (2, 12, 6),
+    "portals": (4, 12, 7), "torus": (3, 8, 6), "hex": (2, 7, 4), "tri": (2, 5, 3),
+    "oneway": (3, 12, 7), "overpass": (4, 12, 7), "keys": (4, 12, 7), "cubesurf": (2, 5, 3),
 }
 OPTION_KEYS = {"walls": {"walls_frac": float}, "islands": {"jumps": int, "decoys": int, "max_per_pair": int,
                                                             "extra_bridges": int, "min_side": int,
                                                             "max_side": int, "gap": int},
-               "mask": {"fill": float}}
+               "mask": {"fill": float},
+               "portals": {"portals": int, "decoys": int, "min_dist": int, "walls_frac": float},
+               "torus": {"wraps": int},
+               "oneway": {"oneway_frac": float, "decoys": int, "walls_frac": float},
+               "overpass": {"overpasses": int},
+               "keys": {"keys": int, "min_gap": int, "walls_frac": float}}
 MAX_NODES = 1500
 
 # Difficulty presets (shared with the client via /api/presets; the daily puzzles use them).
@@ -95,6 +113,7 @@ class GenerateReq(BaseModel):
     time_limit: float = 15.0
     include_solution: bool = False
     bank: str | None = None           # "<mode>-<diff>": serve from the curated bank when available
+    fog: bool = False                 # fog of war (any kind): numbers stay hidden until the path is near
 
 
 class PuzzleReq(BaseModel):
@@ -103,12 +122,14 @@ class PuzzleReq(BaseModel):
 
 
 class CheckReq(PuzzleReq):
-    path: list[int]
+    path: list[int] = Field(default_factory=list)
+    paths: list[list[int]] | None = None       # kind "coop": [path 1, path 2] (partial allowed)
 
 
 class ExactReq(PuzzleReq):
     time_limit: float = 10.0
     start_path: list[int] | None = None
+    start_paths: list[list[int]] | None = None   # kind "coop"
     trace: bool = False
 
 
@@ -129,9 +150,36 @@ class RLReq(PuzzleReq):
     trace: bool = False
 
 
+class RobotReq(PuzzleReq):
+    robot: str = "detective"       # detective | mcts | evolver | gambler | sat (zipsolve.robots)
+    time_limit: float = 10.0
+    trace: bool = True
+    seed: int = 0
+
+
+class ExplainReq(PuzzleReq):
+    path: list[int] = Field(default_factory=list)
+    time_limit: float = 3.0
+
+
 class HintReq(PuzzleReq):
-    path: list[int]
+    path: list[int] = Field(default_factory=list)
+    paths: list[list[int]] | None = None       # kind "coop"
+    path_index: int | None = None              # kind "coop": the pen the player holds (0/1)
     time_limit: float = 5.0
+
+
+class ArchitectReq(BaseModel):                 # POST /api/architect/design (zipsolve.architect)
+    kind: str = "classic"
+    size: int = 8
+    target: str = "expert"
+    time_budget: float = 20.0
+    seed: int | None = None
+    include_solution: bool = False
+
+
+# kind -> (min size, max size) for the Architect endpoint (islands: number of islands)
+ARCHITECT_SIZES = {"classic": (5, 10), "grid2d": (5, 10), "walls": (5, 10), "islands": (3, 8)}
 
 
 def _clamp(x, lo, hi):
@@ -273,7 +321,35 @@ def create_app(checkpoint_dir: str | Path | None = None, bank_dir: str | Path | 
 
     @app.post("/api/generate")
     async def generate(req: GenerateReq):
+        out = await _generate_request(req)
+        if req.fog and isinstance(out.get("puzzle"), dict):
+            out["puzzle"].setdefault("meta", {})["fog"] = True
+        return out
+
+    async def _generate_request(req: GenerateReq):
         from ..generator import GenerationTimeout, make_puzzle
+        if req.kind == "coop":   # two-path co-op puzzles (zipsolve.coop)
+            from .. import coop as _coop
+            seed = req.seed if req.seed is not None else secrets.randbelow(10**9)
+            e = bank.pick(*req.bank.partition("-")[::2], seed) if req.bank and "-" in req.bank else None
+            if e is not None and e["puzzle"].get("kind") == "coop":   # curated co-op pool (same pick as online)
+                d = json.loads(json.dumps(e["puzzle"]))
+                sol = (d.get("meta", {}).get("coop", {}).pop("solution", None) or {}).get("paths")
+                out = {"id": remember(sol), "seed": seed, "kind": "coop", "size": e.get("size"), "unique": True,
+                       "num_nodes": len(d["coords"]), "seconds": 0.0, "puzzle": d, "rating": _bank_rating(e),
+                       "bank_id": e.get("id"), "source": "bank"}
+                if req.include_solution:
+                    out["solution"] = {"paths": sol}
+                return out
+            try:
+                out, sol = await run_in_threadpool(_coop.api_generate, req.size, req.num_checkpoints, seed,
+                                                   req.unique, req.options, _clamp(req.time_limit, 1.0, 60.0))
+            except ValueError as e:   # includes GenerationTimeout
+                raise HTTPException(422, str(e))
+            out["id"] = remember(sol)
+            if req.include_solution:
+                out["solution"] = {"paths": sol}
+            return out
         if req.bank and "-" in req.bank:
             mode, _, diff = req.bank.partition("-")
             bseed = req.seed if req.seed is not None and req.seed >= 0 else secrets.randbelow(10**9)
@@ -334,6 +410,13 @@ def create_app(checkpoint_dir: str | Path | None = None, bank_dir: str | Path | 
 
     @app.post("/api/check")
     async def check(req: CheckReq):
+        if isinstance(req.puzzle, dict) and req.puzzle.get("kind") == "coop":
+            from .. import coop as _coop
+            try:
+                cp = _coop.api_load(req.puzzle)
+            except ValueError as e:
+                raise HTTPException(400, f"bad puzzle: {e}")
+            return _coop.check_partial(cp, req.paths if req.paths is not None else [req.path, []])
         p = load_puzzle(req.puzzle)
         full = p.check_solution(req.path)
         partial = validate_prefix(p, req.path) if req.path else "empty path"
@@ -342,6 +425,14 @@ def create_app(checkpoint_dir: str | Path | None = None, bank_dir: str | Path | 
 
     @app.post("/api/solve/exact")
     async def solve_exact(req: ExactReq):
+        if isinstance(req.puzzle, dict) and req.puzzle.get("kind") == "coop":
+            from .. import coop as _coop
+            try:
+                cp = _coop.api_load(req.puzzle)
+                return await run_in_threadpool(_coop.api_solve, cp, _clamp(req.time_limit, 0.1, 60.0),
+                                               req.start_paths)
+            except ValueError as e:
+                raise HTTPException(400, str(e))
         p = load_puzzle(req.puzzle)
         tl = _clamp(req.time_limit, 0.1, 60.0)
         if req.start_path:
@@ -379,8 +470,43 @@ def create_app(checkpoint_dir: str | Path | None = None, bank_dir: str | Path | 
         out["model_stage"] = meta.get("stage")
         return out
 
+    @app.get("/api/robots")
+    def robots_list():   # the strategy robots of zipsolve.robots (availability: optional deps)
+        from .. import robots as _robots
+        return {"robots": _robots.listing()}
+
+    @app.post("/api/solve/robot")
+    async def solve_robot(req: RobotReq):
+        from .. import robots as _robots
+        try:
+            key = _robots.resolve(req.robot)
+        except KeyError as e:
+            raise HTTPException(400, str(e.args[0]))
+        p = load_puzzle(req.puzzle)
+        tl = _clamp(req.time_limit, 0.2, 60.0)
+        return await run_in_threadpool(_robots.run_robot, key, p, tl, req.trace, int(req.seed))
+
+    @app.post("/api/hint/explain")
+    async def explain_hint(req: ExplainReq):   # the Detective's teaching hint: {status, move, reason, ...}
+        from .. import robots as _robots
+        p = load_puzzle(req.puzzle)
+        sol = store.get(req.id) if req.id else None
+        if sol is not None and not p.is_valid_solution(sol):
+            sol = None
+        return await run_in_threadpool(_robots.explain_next_move, p, req.path, _clamp(req.time_limit, 0.5, 20.0),
+                                       sol)
+
     @app.post("/api/hint")
     async def get_hint(req: HintReq):
+        if isinstance(req.puzzle, dict) and req.puzzle.get("kind") == "coop":
+            from .. import coop as _coop
+            try:
+                cp = _coop.api_load(req.puzzle)
+            except ValueError as e:
+                raise HTTPException(400, f"bad puzzle: {e}")
+            sol = store.get(req.id) if req.id else None
+            return await run_in_threadpool(_coop.hint, cp, req.paths if req.paths is not None else [req.path, []],
+                                           sol, _clamp(req.time_limit, 0.5, 20.0), req.path_index)
         p = load_puzzle(req.puzzle)
         sol = store.get(req.id) if req.id else None
         if sol is not None and not p.is_valid_solution(sol):
@@ -398,6 +524,49 @@ def create_app(checkpoint_dir: str | Path | None = None, bank_dir: str | Path | 
             raise HTTPException(400, str(e))
         out["model"] = name
         out["model_stage"] = meta.get("stage")
+        return out
+
+    @app.post("/api/architect/design")
+    async def architect_design(req: ArchitectReq):
+        """😈 Ask the Architect: design a unique, fair puzzle aimed at Expert / Insane."""
+        from ..architect import TARGETS, design
+        if req.kind not in ARCHITECT_SIZES:
+            raise HTTPException(400, f"unknown kind {req.kind!r}; expected one of {sorted(ARCHITECT_SIZES)}")
+        if req.target not in TARGETS:
+            raise HTTPException(400, f"target must be one of {sorted(TARGETS)}")
+        lo, hi = ARCHITECT_SIZES[req.kind]
+        size = _clamp(int(req.size), lo, hi)
+        budget = _clamp(float(req.time_budget), 2.0, 60.0)
+        seed = req.seed if req.seed is not None and req.seed >= 0 else secrets.randbelow(10**9)
+        try:
+            r = await run_in_threadpool(design, req.kind, size, req.target, budget, seed)
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+        out = r.to_dict()
+        if not r.ok:
+            raise HTTPException(422, "the Architect could not certify a design in time; try a larger time_budget")
+        sol = out["puzzle"].pop("solution")
+        out["id"] = remember(sol)
+        out["num_nodes"] = len(out["puzzle"]["coords"])
+        out["seed"] = seed
+        out["source"] = "architect"
+        if req.include_solution:
+            out["solution"] = sol
+        return out
+
+    @app.get("/api/architect/weekly")
+    def architect_weekly(week: str | None = None):
+        """😈 This week's Architect challenge (bank/architect/weekly.json, keyed by ISO week "YYYY-Www")."""
+        if week is None:
+            y, w, _ = _dt.date.today().isocalendar()
+            week = f"{y:04d}-W{w:02d}"
+        wk = bank.weekly(week)
+        if wk is None:
+            raise HTTPException(404, "no weekly Architect challenge in the bank")
+        e, key = wk
+        out, _ = from_bank(e, seed_of(e))
+        out["weekly"] = {"week": week, "bank_week": key, "number": e.get("number"), "label": e.get("label"),
+                         "clues": (e.get("architect") or {}).get("clues")}
         return out
 
     @app.get("/api/presets")

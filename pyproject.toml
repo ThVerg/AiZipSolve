@@ -9,6 +9,7 @@ dependencies = ["numpy", "networkx", "matplotlib", "gymnasium", "torch", "fastap
 [project.optional-dependencies]
 dev = ["pytest", "httpx"]
 screenshots = ["playwright"]
+robots = ["python-sat"]
 
 [build-system]
 requires = ["setuptools>=61"]
@@ -18,7 +19,9 @@ build-backend = "setuptools.build_meta"
 include = ["zipsolve*"]
 
 [tool.setuptools.package-data]
-"zipsolve.app" = ["static/*"]
+"zipsolve" = ["architect_surrogate.npz"]
+"zipsolve.app" = ["static/*", "static/play/*", "static/bank/*.json", "static/bank/*.md", "static/bank/pools/*",
+                  "static/bank/daily/*", "static/bank/robots/*", "static/bank/architect/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

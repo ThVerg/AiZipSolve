@@ -91,3 +91,43 @@ a node id (>= 0) = push that node, a negative number `-k` = pop `k` nodes,
 `"R"` = a new search attempt starts (clear back to checkpoint 1). Traces are
 capped at 4000 raw events; then `trace_truncated: true` and the replay should
 finish on `path` (as show.js already does).
+
+### Strategy robots (zipsolve.robots)
+
+Some robot files also hold runs of the strategy robots, keyed by robot id:
+`detective`, `mcts` (Sage), `evolver`, `gambler`, `sat` (Mathematician) - for
+every "more modes" puzzle and for the pools the AI show picks from most
+(`classic-medium`, `classic-hard`, `walls-medium`, `islands-medium`,
+`architect-expert`; elsewhere the online show says the robot "hasn't studied" it).
+Built by `scripts/build_bank_modes.py` (8 s time limit, seed = id digits % 1000),
+in the `/api/solve/robot` shape but compacted: `robot_name` / `emoji` are left
+out, `steps` is stored as parallel lists `sp` (p per move) and `sh` (Detective
+technique per move) along `path[1:]`, Evolver generations and Sage tree
+snapshots are thinned to ~12 each (Sage trees: top 3 children with 2 kids each),
+notes are capped per kind (the Detective's notes explaining the solution are kept),
+`stats.fitness_history` to 40 points. Traces end on `path` (a final
+`{"t":"path"}` event is added when needed). `play/static_api.js` expands them
+back. The Detective's notes along the unique solution double as the online
+"teaching hints" (`/api/hint/explain`).
+
+## More modes (scripts/build_bank_modes.py, additive)
+
+`pools/<mode>-medium.json` and `pools/<mode>-hard.json` for `portals`, `torus`,
+`hex`, `tri`, `oneway`, `overpass`, `keys`, `cubesurf` (50 + 40 puzzles), and
+`pools/coop-medium.json` (40 two-path co-op puzzles, 6x6). Ids: `p`, `t`, `h`,
+`r`, `o`, `v`, `k`, `s`, `x` + 9 hex digits. Entry `puzzle` is the kind's
+`to_dict()`; one-way arcs / key-door precedence are top-level `arcs` /
+`precedence`. Co-op entries: `CoopPuzzle.to_dict(include_solution=True)`, so
+the two unique paths are under `meta.coop.solution.paths` (served without it).
+`index.json` gets `modes.<mode>` entries plus `more_modes: {modes, puzzles,
+robots, generated}`. `scripts/build_bank.py` keeps other builders' modes and
+index keys when it rewrites index.json.
+
+## The Architect
+
+`pools/architect-expert.json`, `pools/architect-insane.json` and
+`architect/weekly.json` (`{"YYYY-Www": entry}`, ISO weeks 2026-W01 .. 2027-W52)
+are built by `scripts/architect_designs.py`. The game's home shows the week's
+puzzle ("This week's Architect challenge": `GET /api/architect/weekly?week=`;
+weeks outside the file wrap around: key = sorted keys[(year * 53 + week) % n]).
+Online, "Ask the Architect" picks one of its certified designs from the pools.

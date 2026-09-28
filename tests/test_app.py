@@ -476,3 +476,12 @@ def test_shipped_model_is_default(tmp_path):
     (tmp_path / "zip_gnn.pt").unlink()
     models = ModelRegistry(tmp_path).list()
     assert [m["name"] for m in models if m["default"]] == ["run_final.pt"]
+
+
+@pytest.mark.parametrize("kind,size", [("grid2d", 5), ("islands", 3), ("hex", 3), ("coop", 5)])
+def test_generate_fog_flag(client, kind, size):
+    r = client.post("/api/generate", json={"kind": kind, "size": size, "seed": 1, "fog": True})
+    assert r.status_code == 200, r.text
+    assert r.json()["puzzle"]["meta"]["fog"] is True
+    r = client.post("/api/generate", json={"kind": kind, "size": size, "seed": 1})
+    assert not r.json()["puzzle"].get("meta", {}).get("fog")

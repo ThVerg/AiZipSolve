@@ -8,7 +8,7 @@ from typing import Sequence
 
 import numpy as np
 
-from .graph import ZipGraph, from_edges
+from .graph import ZipGraph, arcs_of, from_edges, precedence_of
 
 
 @dataclass
@@ -61,12 +61,29 @@ class Puzzle:
         order = [pos[c] for c in self.checkpoints]
         if order != sorted(order):
             return "checkpoints are not visited in order"
+        for u, v in arcs_of(g):          # one-way: {u, v} only u -> v
+            if pos[v] + 1 == pos[u]:
+                return f"one-way edge {u} -> {v} used backwards"
+        for a, b in precedence_of(g):    # keys before doors
+            if pos[a] > pos[b]:
+                return f"node {b} visited before node {a} (door before its key)"
         return None
+
+    @property
+    def arcs(self) -> list[tuple[int, int]]:
+        """One-way edges (u, v): {u, v} may only be traversed u -> v."""
+        return arcs_of(self.graph)
+
+    @property
+    def precedence(self) -> list[tuple[int, int]]:
+        """(a, b): node a must be visited before node b (key before door)."""
+        return precedence_of(self.graph)
 
     # ---- serialisation -------------------------------------------------
     def to_dict(self) -> dict:
-        meta = {k: v for k, v in self.graph.meta.items() if not k.startswith("_")}
-        return {
+        meta = {k: v for k, v in self.graph.meta.items()
+                if not k.startswith("_") and k not in ("arcs", "precedence")}
+        d = {
             "kind": self.graph.kind,
             "coords": self.graph.coords.tolist(),
             "edges": [list(e) for e in self.graph.edges()],
@@ -74,11 +91,38 @@ class Puzzle:
             "checkpoints": list(map(int, self.checkpoints)),
             "solution": None if self.solution is None else list(map(int, self.solution)),
         }
+        # optional constraint lists (top-level per the JSON contract; absent when empty)
+        if self.arcs:
+            d["arcs"] = [[int(u), int(v)] for u, v in self.arcs]
+        if self.precedence:
+            d["precedence"] = [[int(a), int(b)] for a, b in self.precedence]
+        return d
 
     @classmethod
     def from_dict(cls, d: dict) -> "Puzzle":
-        g = from_edges(np.array(d["coords"], dtype=float), [tuple(e) for e in d["edges"]],
-                       d.get("kind", "custom"), d.get("meta") or {})
+        meta = dict(d.get("meta") or {})
+        n = len(d["coords"])
+        edges = [tuple(e) for e in d["edges"]]
+        arcs = d.get("arcs")
+        if arcs is None and meta.get("oneway"):        # renderer copy (meta.oneway)
+            arcs = meta["oneway"]
+        prec = d.get("precedence")
+        if prec is None and meta.get("keys"):          # renderer copy (meta.keys)
+            prec = [[k["key"], k["door"]] for k in meta["keys"]]
+        if arcs:
+            eset = {frozenset(map(int, e)) for e in edges}
+            arcs = [[int(u), int(v)] for u, v in arcs]
+            for u, v in arcs:
+                if frozenset((u, v)) not in eset:
+                    raise ValueError(f"arc {u}->{v} is not an edge")
+            meta["arcs"] = arcs
+        if prec:
+            prec = [[int(a), int(b)] for a, b in prec]
+            for a, b in prec:
+                if not (0 <= a < n and 0 <= b < n) or a == b:
+                    raise ValueError(f"bad precedence pair {a}, {b}")
+            meta["precedence"] = prec
+        g = from_edges(np.array(d["coords"], dtype=float), edges, d.get("kind", "custom"), meta)
         return cls(g, list(d["checkpoints"]), d.get("solution"))
 
     def save(self, path: str | Path) -> None:

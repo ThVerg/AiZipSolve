@@ -106,6 +106,9 @@
       </article>
     </div>
 
+    <div class="more-head" id="moreHead"><h2 class="sect">New puzzles</h2><span class="new-pill">New</span></div>
+    <div class="more" id="more" role="list" aria-label="New puzzle types"></div>
+
     <h2 class="sect">Robot vs robot</h2>
     <article class="vs-card" id="vsCard">
       <button class="mode-hit" type="button" id="vsGo" aria-label="Start a robot face-off"></button>
@@ -113,6 +116,17 @@
       <div class="vs-txt">
         <h3>Face-off</h3>
         <p>Two robots, one puzzle. Who's smarter?</p>
+      </div>
+      <span class="vs-go" aria-hidden="true">›</span>
+    </article>
+
+    <h2 class="sect">Puzzle maker</h2>
+    <article class="vs-card arch-card" id="archCard">
+      <button class="mode-hit" type="button" id="archGo" aria-label="Ask the Architect to design a puzzle"></button>
+      <div class="vs-art arch-art" aria-hidden="true"><span class="arch-av">😈</span><span class="arch-pen">✏️</span></div>
+      <div class="vs-txt">
+        <h3>Ask the Architect</h3>
+        <p>An AI designs a devious puzzle, live.</p>
       </div>
       <span class="vs-go" aria-hidden="true">›</span>
     </article>
@@ -195,6 +209,24 @@
     <h2 class="sh-title" id="pkTitle">Pick a robot</h2>
     <div class="pk-list" id="pkList"></div>
     <div class="sh-btns"><button class="soft-btn" id="pkClose" type="button">Close</button></div>
+  </div>
+</div>
+
+<!-- the Architect designs a puzzle -->
+<div class="sheet-bg" id="arch" role="dialog" aria-modal="true" aria-labelledby="arTitle" hidden>
+  <div class="sheet arch">
+    <div class="ar-head"><span class="ar-av" id="arAv">😈</span><div class="ar-say" id="arSay" role="status" aria-live="polite">Hmm…</div></div>
+    <h2 class="sh-title" id="arTitle">Designing…</h2>
+    <div class="ar-board" id="arBoard"></div>
+    <div class="sh-row" id="arRow"></div>
+    <div class="sh-btns" id="arBtns" hidden>
+      <a class="play-btn dark" id="arPlay" href="/">Play it <span aria-hidden="true">✍️</span></a>
+      <div class="sh-2">
+        <button class="soft-btn" id="arBot" type="button">Let a robot try 🤖</button>
+        <button class="soft-btn" id="arAgain" type="button">😈 Another</button>
+      </div>
+    </div>
+    <div class="sh-btns" id="arWait"><div class="sh-2"><button class="soft-btn" id="arCancel" type="button">Never mind</button></div></div>
   </div>
 </div>
 

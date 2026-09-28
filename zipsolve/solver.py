@@ -42,6 +42,20 @@ prunings (none of them can discard a real solution):
    a fragment must carry consecutive labels (increasing away from the head).
    A forced edge at the head is a forced move.
 
+7. **One-way arcs and precedence** (``graph.meta["arcs"]`` /
+   ``graph.meta["precedence"]``, see ``zipsolve.graph``).  Moves honour them
+   (an arc {u, v} is usable only u -> v; a node with prerequisites can only be
+   entered once they are all visited).  Every pruning above reasons on the
+   *undirected* graph without precedence, which is a relaxation (a solution of
+   the constrained puzzle is also one of the relaxed puzzle), so it stays
+   sound; forced moves are dropped when the constraints forbid them (which
+   prunes the branch).  On top of that, with arcs every unvisited node needs a
+   usable in-neighbour (unvisited or the head) and a usable out-neighbour
+   (unvisited, a different one), the final checkpoint an in-neighbour, and a
+   node whose only in-neighbour is the head is a forced move.  With
+   precedence the articulation-point reasoning also demands key side <= door
+   side (head side < cut vertex < end side).
+
 Move ordering (default): the next checkpoint first, otherwise lowest
 ``free_degree + distance_to_next_checkpoint`` (Warnsdorff plus a pull towards
 the next checkpoint; the distance term matters a lot on 3D/4D grids).
@@ -85,7 +99,7 @@ from typing import Callable, Sequence
 
 import numpy as np
 
-from .graph import ZipGraph
+from .graph import ZipGraph, blocked_steps, precedence_of, prerequisites
 from .puzzle import Puzzle
 
 MoveOrder = Callable[[int, list, np.ndarray, int], Sequence[int]]
@@ -158,6 +172,11 @@ class _Search:
         for i, c in enumerate(self.cps):
             self.cpi[c] = i
         self.col = _bipartite_colours(graph)
+        # one-way arcs (node -> forbidden next nodes) and precedence (node -> prerequisites)
+        self.blocked = blocked_steps(graph)
+        self.pre = prerequisites(graph)
+        self.prec = precedence_of(graph)
+        self.constrained = self.blocked is not None or self.pre is not None
         self.deep = deep
         self.chains = True
         self.dyn = False        # BFS from next checkpoint (sound, but did not pay off in benchmarks)
@@ -215,6 +234,57 @@ class _Search:
         if self.cpi[h] >= 0 and self.cpi[h] == self.nxt - 1:
             self.nxt -= 1
 
+    # ---- constraints (arcs / precedence) -----------------------------------
+    def ok_step(self, h: int, w: int) -> bool:
+        """Move h -> w allowed by the arcs and by precedence (adjacency not checked)."""
+        bl = self.blocked
+        if bl is not None:
+            b = bl.get(h)
+            if b is not None and w in b:
+                return False
+        pre = self.pre
+        if pre is not None:
+            ks = pre.get(w)
+            if ks is not None:
+                vis = self.visited
+                for k in ks:
+                    if not vis[k]:
+                        return False
+        return True
+
+    def dir_status(self, x: int, h: int) -> int:
+        """Directed degree rule for an unvisited node x (only with arcs).
+
+        -2: dead; 1: x must be the next move (its only usable in-neighbour is
+        the head); 0: fine.
+        """
+        bl, vis = self.blocked, self.visited
+        empty = ()
+        bx = bl.get(x, empty)
+        ins = []
+        outs = []
+        for y in self.nbrs[x]:
+            if vis[y] and y != h:
+                continue
+            if x not in bl.get(y, empty):
+                ins.append(y)
+            if y != h and y not in bx:
+                outs.append(y)
+        if x == self.end:
+            if not ins:
+                return -2
+            if len(ins) == 1 and ins[0] == h:
+                return -2 if self.remaining > 1 else 1
+            return 0
+        if not ins or not outs:
+            return -2
+        if len(ins) == 1:
+            if len(outs) == 1 and ins[0] == outs[0]:
+                return -2
+            if ins[0] == h:
+                return 1
+        return 0
+
     # ---- checks -----------------------------------------------------------
     def global_check(self) -> bool:
         """Full (non-incremental) check of the current state. True = viable."""
@@ -225,6 +295,9 @@ class _Search:
         # checkpoints before nxt visited, from nxt on unvisited
         for i, c in enumerate(self.cps):
             if (i < self.nxt) != bool(vis[c]):
+                return False
+        for a, b in self.prec:          # a door already visited without its key
+            if vis[b] and not vis[a]:
                 return False
         if self.remaining == 0:
             return h == self.end
@@ -247,9 +320,22 @@ class _Search:
                     if forced >= 0:
                         return False
                     forced = u
+        if self.blocked is not None:
+            for u in range(n):
+                if vis[u]:
+                    continue
+                st = self.dir_status(u, h)
+                if st == -2:
+                    return False
+                if st == 1:
+                    if forced >= 0 and forced != u:
+                        return False
+                    forced = u
         if forced >= 0:
             c = self.cpi[forced]
             if c >= 0 and c != self.nxt:
+                return False
+            if not self.ok_step(h, forced):
                 return False
         # connectivity of the unvisited set, head adjacent to it
         if not any(not vis[x] for x in nbrs[h]):
@@ -327,9 +413,23 @@ class _Search:
                 continue
             if deg[x] < (1 if x == end else 2):
                 return -2
+        if self.blocked is not None:
+            for grp in (nbrs[h], nbrs[p]):
+                for x in grp:
+                    if vis[x]:
+                        continue
+                    stx = self.dir_status(x, h)
+                    if stx == -2:
+                        return -2
+                    if stx == 1:
+                        if forced >= 0 and forced != x:
+                            return -2
+                        forced = x
         if forced >= 0:
             c = self.cpi[forced]
             if c >= 0 and c != self.nxt:
+                return -2
+            if self.constrained and not self.ok_step(h, forced):
                 return -2
         # connectivity: all unvisited neighbours of h mutually reachable
         if len(A) > 1:
@@ -586,6 +686,14 @@ class _Search:
                 if k < prev:
                     return False
                 prev = k
+            # precedence: a key may not lie on a later side than its door
+            for kk, dd in self.prec:
+                if vis[kk]:
+                    continue
+                sk = 1 if kk == a else (2 if lo <= disc[kk] < hi else 0)
+                sd = 1 if dd == a else (2 if lo <= disc[dd] < hi else 0)
+                if sd < sk:
+                    return False
             if col is not None:
                 R = total - sz[c] - 1
                 if col[a] != ch ^ (R & 1):
@@ -608,8 +716,11 @@ class _Search:
         """
         cpi, nxt, end = self.cpi, self.nxt, self.end
         if forced >= 0:
+            if self.constrained and not self.ok_step(h, forced):
+                return []
             return [forced]
         vis, deg, rem = self.visited, self.deg, self.remaining
+        constrained = self.constrained
         rnd = self.rng.random if self.rng is not None else None
         cp_pref = self.cp_pref
         dist = self.dd if (self.dyn_order and self.dd is not None) else self.dist[nxt]
@@ -617,6 +728,8 @@ class _Search:
         out = []
         for w in self.nbrs[h]:
             if vis[w]:
+                continue
+            if constrained and not self.ok_step(h, w):
                 continue
             c = cpi[w]
             if c >= 0:
@@ -780,10 +893,13 @@ def check_prefix(puzzle: Puzzle, prefix: Sequence[int]) -> str | None:
     """None if ``prefix`` is a legal partial path (possibly complete), else a reason.
 
     Legal: non-empty, starts at checkpoint 1, valid distinct node ids, consecutive
-    nodes adjacent, checkpoints met in order, and the final checkpoint only as
-    the very last node of a complete path.
+    nodes adjacent (one-way arcs used forwards only), checkpoints met in order,
+    every node entered only after its prerequisites (keys before doors), and
+    the final checkpoint only as the very last node of a complete path.
     """
     g = puzzle.graph
+    bl = blocked_steps(g) or {}
+    pre = prerequisites(g) or {}
     n = g.num_nodes
     cps = puzzle.checkpoints
     cpi = {c: i for i, c in enumerate(cps)}
@@ -805,6 +921,11 @@ def check_prefix(puzzle: Puzzle, prefix: Sequence[int]) -> str | None:
         seen.add(v)
         if i > 0 and not g.has_edge(int(prefix[i - 1]), v):
             return f"nodes {int(prefix[i - 1])} and {v} are not adjacent"
+        if i > 0 and v in bl.get(int(prefix[i - 1]), ()):
+            return f"one-way edge {v} -> {int(prefix[i - 1])} used backwards"
+        for a in pre.get(v, ()):
+            if a not in seen:
+                return f"node {v} entered before node {a} (door before its key)"
         k = cpi.get(v)
         if k is not None:
             if k != nxt:
@@ -841,16 +962,23 @@ def solve_from_prefix(puzzle: Puzzle, prefix: Sequence[int], time_limit: float |
 def legal_moves(puzzle: Puzzle, prefix: Sequence[int]) -> list[int]:
     """Legal next nodes after a (legal) prefix, by the game rules only (same as
     ``ZipEnv``'s action mask): unvisited neighbours of the head that are not a
-    checkpoint out of order, the final checkpoint only as the very last node."""
+    checkpoint out of order, the final checkpoint only as the very last node,
+    not against a one-way arc, not a door whose key is still unvisited."""
     g = puzzle.graph
+    bl = blocked_steps(g) or {}
+    pre = prerequisites(g) or {}
     cps = puzzle.checkpoints
     cpi = {c: i for i, c in enumerate(cps)}
     vis = set(int(v) for v in prefix)
     nxt = sum(1 for v in vis if v in cpi)
     n = g.num_nodes
     out = []
-    for w in g.neighbors[int(prefix[-1])]:
-        if w in vis:
+    h = int(prefix[-1])
+    bh = bl.get(h, ())
+    for w in g.neighbors[h]:
+        if w in vis or w in bh:
+            continue
+        if any(a not in vis for a in pre.get(w, ())):
             continue
         k = cpi.get(w, -1)
         if k > nxt:

@@ -171,6 +171,10 @@ class ZipEnv(gym.Env):
         for k, c in enumerate(self.cps):
             self.cp_index[c] = k
         self.end = self.cps[-1]
+        # one-way arcs (node -> forbidden next nodes) and precedence (door -> keys)
+        from ..graph import blocked_steps, prerequisites
+        self._blocked = blocked_steps(g) or {}
+        self._prereq = prerequisites(g) or {}
         if self.feature_version >= 2:
             self.nbr_lists = [list(ns) for ns in g.neighbors]
             self.colour, self.bipartite = _two_colouring(self.nbr_lists)
@@ -222,7 +226,10 @@ class ZipEnv(gym.Env):
 
     def _compute_mask(self) -> np.ndarray:
         m = np.zeros(self.n, dtype=bool)
+        bh = self._blocked.get(self.head, ())
         for w in self.nbrs[self.head]:
+            if w in bh or any(not self.visited[k] for k in self._prereq.get(w, ())):
+                continue
             if self._allowed(w):
                 m[w] = True
         return m

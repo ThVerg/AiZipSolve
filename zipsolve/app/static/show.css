@@ -213,3 +213,54 @@ body.screen-pick.show .gbar::before { content: ""; position: absolute; inset: 0 
 .pk.on { border-color: var(--ink); box-shadow: 0 0 0 1.5px var(--ink) inset; }
 .picker .sh-btns { margin-top: 12px; }
 .picker .soft-btn { flex: none; }
+
+/* ---- strategy robots (zipsolve.robots) ---- */
+.av-detective { background: linear-gradient(140deg, #d9c7a3, #8a6a3f) !important; }
+.av-mcts { background: linear-gradient(140deg, #b9f0a8, #2f9e5a) !important; }
+.av-evolver { background: linear-gradient(140deg, #ffc2e8, #c03fa0) !important; }
+.av-gambler { background: linear-gradient(140deg, #ffe08a, #e0602f) !important; }
+.av-sat { background: linear-gradient(140deg, #bfe3ff, #3a6fd8) !important; }
+.who-b.av-detective .who-av { background: linear-gradient(140deg, #d9c7a3, #8a6a3f); }
+.who-b.av-mcts .who-av { background: linear-gradient(140deg, #b9f0a8, #2f9e5a); }
+.who-b.av-evolver .who-av { background: linear-gradient(140deg, #ffc2e8, #c03fa0); }
+.who-b.av-gambler .who-av { background: linear-gradient(140deg, #ffe08a, #e0602f); }
+.who-b.av-sat .who-av { background: linear-gradient(140deg, #bfe3ff, #3a6fd8); }
+.r-detective .rival-av, .r-mcts .rival-av { background: none; }
+/* speech bubbles: long notes (the Detective's reasoning) get a smaller font instead of overflowing */
+.cap.long { font-size: 14.5px; line-height: 1.3; }
+@media (max-width: 480px) { .cap.long { font-size: 13.5px; } }
+/* the Evolver's whole line wriggles into each new generation; the Mathematician's answer sweeps in */
+.gp .zboard.wriggle .g-path { animation: wriggle .45s ease-in-out; transform-box: fill-box; transform-origin: center; }
+@keyframes wriggle { 20% { transform: skewX(4deg) scale(1.01); } 45% { transform: skewX(-4deg); } 70% { transform: skewX(2deg); } }
+.gp .zboard .seg.flourish { stroke-dasharray: 1 1; stroke-dashoffset: 1; animation: segin .25s ease-out forwards; }
+/* ask the Architect */
+.arch-card { margin-top: 0; }
+.arch-art { position: relative; padding: 12px 22px; background: radial-gradient(circle at 30% 20%, color-mix(in srgb, #6d4ae0 26%, var(--panel)), color-mix(in srgb, #d63a8f 14%, var(--panel))); }
+.arch-av { font-size: 40px; display: inline-block; animation: bob 2s ease-in-out infinite; }
+.arch-pen { position: absolute; right: 6px; bottom: 6px; font-size: 20px; animation: scribble 1.2s ease-in-out infinite; }
+@keyframes scribble { 25% { transform: translate(-4px, -2px) rotate(-10deg); } 50% { transform: translate(2px, 1px); } 75% { transform: translate(-2px, 2px) rotate(8deg); } }
+.sheet.arch { padding-top: 22px; }
+.ar-head { display: flex; align-items: center; gap: 12px; text-align: left; margin-bottom: 6px; }
+.ar-av { flex: none; width: 60px; height: 60px; border-radius: 50%; display: grid; place-items: center; font-size: 36px;
+  background: linear-gradient(140deg, #c7b3ff, #6d4ae0); box-shadow: 0 8px 20px -6px rgba(109, 74, 224, .6); }
+.ar-av.ar-busy { animation: think 1s ease-in-out infinite; }
+.ar-say { position: relative; flex: 1; min-height: 46px; display: flex; align-items: center; padding: 8px 14px; border-radius: 18px; background: var(--panel-2); border: 1px solid var(--border);
+  font: 600 15.5px/1.25 var(--display); }
+.ar-say.pop { animation: cappop .3s var(--spring); }
+.ar-board { display: grid; place-items: center; margin: 12px auto 6px; min-height: 200px; }
+.ar-grid { position: relative; width: min(230px, 62vw); aspect-ratio: 1; display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+.ar-grid i { border-radius: 7px; background: var(--cell); border: 1px solid var(--cell-edge); animation: arflick 1.4s ease-in-out infinite; }
+@keyframes arflick { 50% { background: color-mix(in srgb, #6d4ae0 22%, var(--cell)); transform: scale(.9); } }
+.ar-num { position: absolute; width: calc(100% / 7); aspect-ratio: 1; display: grid; place-items: center; transition: left .5s var(--spring), top .5s var(--spring); }
+.ar-num::before { content: ""; position: absolute; width: 64%; aspect-ratio: 1; border-radius: 50%; background: var(--cp); }
+.ar-num { color: #fff; font: 700 14px var(--display); z-index: 1; }
+.ar-num { isolation: isolate; }
+.ar-num::before { z-index: -1; }
+.zboard.ar-reveal .cell, .zboard.ar-reveal .cp { animation: arin .5s var(--spring) both; transform-box: fill-box; transform-origin: center; }
+.zboard.ar-reveal .cp { animation-delay: .25s; }
+@keyframes arin { from { transform: scale(0); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .arch-av, .arch-pen, .ar-av.ar-busy, .ar-grid i, .gp .zboard .branch, .gp .zboard .twig { animation: none !important; stroke-dashoffset: 0; } }
+.gp .zboard .branch, .gp .zboard .twig { stroke-dasharray: 1 1; stroke-dashoffset: 1; animation: segin .45s ease-out forwards; opacity: .85; }
+.gp .zboard .twig { opacity: .55; }
+.gp .zboard .leaf { transform-box: fill-box; transform-origin: center; animation: saypop .35s var(--spring) both; }
+.sheet.arch a.play-btn { text-decoration: none; }

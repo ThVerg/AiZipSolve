@@ -21,8 +21,12 @@ a graph-neural-network agent trained with imitation learning + reinforcement lea
 
 The online version is a static site (GitHub Pages): puzzles come from a curated bank of
 unique-solution puzzles with pre-recorded robot runs (`zipsolve/app/static/bank/`), so it needs no
-server. The puzzle editor, the AI workbench (live model, "AI vision" heat maps, custom options) and
-the training dashboard need the local app.
+server. That includes the "more modes" (portals, wraparound, hex, triangles, one-way, overpass,
+keys & doors, cube surface, fog, two-player co-op), the strategy robots' recorded runs in the AI
+show (Detective, Sage, Evolver, Gambler, Mathematician), the Architect's designs and its weekly
+challenge. Live robots on any puzzle, the Architect designing from scratch, the puzzle editor,
+the AI workbench (live model, "AI vision" heat maps, custom options) and the training dashboard
+need the local app.
 
 ## Run locally
 

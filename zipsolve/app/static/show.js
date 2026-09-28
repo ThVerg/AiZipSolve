@@ -1,11 +1,12 @@
 // Zip — the AI show (/lab). Pick a puzzle, watch a robot "look" at the board (the network's heat glow),
 // try branches, hit dead ends and back up; or race two robots on the same puzzle. Plain words, no tables:
 // the numbers live behind "Nerd mode" (and in the workbench at /workbench).
-import { $, h, api, PAGES, store, icon, clamp, sleep, reducedMotion, fmtInt, svgEl as el } from "./play/util.js";
+import { $, h, api, PAGES, STATIC, store, icon, clamp, sleep, reducedMotion, fmtInt, svgEl as el } from "./play/util.js";
 import { Board, makeModel } from "./play/board.js";
+import { CubeBoard } from "./play/cubeview.js";
 import { sound } from "./play/sound.js";
 import { createFx } from "./play/fx.js";
-import { MODES, ROBOTS, genParams, modeArt } from "./play/modes.js";
+import { MODES, MORE, ROBOTS, genParams, modeArt, modePool } from "./play/modes.js";
 
 // ------------------------------------------------------------------ the cast
 // Core robots share the default trained brain and differ in how they use it; the Tortoise has no brain at all.
@@ -16,6 +17,19 @@ const CORE = [
   { ...R.grandmaster, line: "Brain + solver. Never loses", brain: true },
   { id: "tortoise", name: "Tortoise", emoji: "🐢", line: "No AI at all. Tries everything", mode: "exact", brain: false,
     say: { go: ["plod plod", "next one…", "slow & steady", "hmm hm hm"], win: "Slow and steady! 🐢", lose: "I'll get there…", stuck: "…zzz", back: "nope, back…" } },
+];
+// the strategy robots (zipsolve.robots via /api/solve/robot): each thinks in its own way, and says so
+const STRATS = [
+  { id: "detective", robot: "detective", name: "Detective", emoji: "🕵️", line: "Explains every move", mode: "robot", brain: false, notes: true,
+    say: { go: ["elementary!", "a clue…", "I see…", "deduced."], win: "Case closed! 🕵️", lose: "a worthy puzzle…", stuck: "the trail went cold…", back: "a false lead…" } },
+  { id: "mcts", robot: "mcts", name: "Sage", emoji: "🌳", line: "Grows a tree of futures", mode: "robot", brain: false, tree: true,
+    say: { go: ["let it grow…", "branching…", "patience…", "the roots say…"], win: "The tree has spoken 🌳", lose: "…next season.", stuck: "a dead branch…", back: "prune that…" } },
+  { id: "evolver", robot: "evolver", name: "Evolver", emoji: "🧬", line: "Breeds whole lines", mode: "robot", brain: false, gens: true,
+    say: { go: ["mutate!", "survival!", "evolving…", "next gen!"], win: "Survival of the fittest 🧬", lose: "extinct… 😵", stuck: "evolution stalled…", back: "mutation!" } },
+  { id: "gambler", robot: "gambler", name: "Gambler", emoji: "🎲", line: "Bets on the odds", mode: "robot", brain: false,
+    say: { go: ["feeling lucky", "all in!", "odds are good", "roll it!"], win: "Jackpot! 🎲", lose: "house wins…", stuck: "bust! 😵", back: "fold!" } },
+  { id: "sat", robot: "sat", name: "Mathematician", emoji: "🧮", line: "Turns it into logic", mode: "robot", brain: false, flourish: true,
+    say: { go: ["let x be…", "∴", "QED soon", "clauses…"], win: "Q.E.D. 🧮", lose: "hmm, a counterexample", stuck: "unsatisfiable?!", back: "contradiction!" } },
 ];
 // other trained checkpoints become challengers (Scout-style search with a different brain); newest / best first
 const ANIMALS = [["🐙", "Octo"], ["🐼", "Panda"], ["🐯", "Tiger"], ["🐸", "Ribbit"], ["🦄", "Sparkle"], ["🐨", "Koala"], ["🐧", "Waddles"], ["🐝", "Buzz"]];
@@ -124,7 +138,11 @@ async function loadCast() {
       say: { go: ["on it!", "this way…", "hmm, yes", "zip zip"], win: `${name} wins! ${emoji}`, lose: "next time!", stuck: "out of ideas…", back: "backing up…" } };
   });
   const noBrain = !S.models.length;
-  CAST = CORE.map((b) => ({ ...b, model: b.brain ? brainName : null, off: b.brain && noBrain })).concat(ch);
+  // strategy robots the server can run (static site: none yet, they need the local app)
+  let avail = new Set();
+  try { const r = await api("/api/robots"); avail = new Set((r.robots || []).filter((x) => x.available !== false).map((x) => x.id)); } catch { avail = new Set(); }
+  const strats = STRATS.map((b) => ({ ...b, off: !avail.has(b.robot) }));
+  CAST = CORE.map((b) => ({ ...b, model: b.brain ? brainName : null, off: b.brain && noBrain })).concat(strats, ch);
   if (noBrain) { S.bot = "tortoise"; S.vs = ["tortoise", "tortoise"]; }
   paintNerd();
 }
@@ -138,7 +156,9 @@ function titleFor(src, d) {
   const shape = d.meta && d.meta.shape ? d.meta.shape.join("×") : "";
   if (src.type === "daily") return [`Zip #${src.number}`, `Daily · ${src.label}`];
   if (src.type === "custom") return [src.name || "Custom puzzle", "From the editor"];
+  if (src.type === "arch") return ["😈 Architect's puzzle", src.rating && src.rating.label ? `Designed to be ${src.rating.label}` : "Designed live"];
   const m = MODES[src.mode], df = m.diffs[src.diff];
+  if (m.more) return [`${m.emoji} ${m.label}`, MORE[src.mode].sub];
   const isl = d.meta && d.meta.island ? new Set(d.meta.island).size : 0;
   if (src.mode === "classic") return [`Classic · ${df.label}`, shape];
   if (isl) return [m.label, `${isl} islands`];
@@ -148,11 +168,13 @@ function beatLink(src) {
   const home = PAGES.home;
   if (src.type === "daily") return `${home}#daily=${encodeURIComponent(src.difficulty)}&date=${src.date}`;
   if (src.type === "custom") return `${home}#custom=${encodeURIComponent(src.id)}`;
+  if (src.type === "arch") return `${home}#arch`;
   return `${home}#play=${src.mode}&diff=${src.diff}&seed=${src.seed}`;
 }
 function srcHash(src) {
   if (src.type === "daily") return `daily=${encodeURIComponent(src.difficulty)}&date=${src.date}`;
   if (src.type === "custom") return `custom=${encodeURIComponent(src.id)}`;
+  if (src.type === "arch") return "arch";
   return `play=${src.mode}&diff=${src.diff}&seed=${src.seed}`;
 }
 let loaderT = null;
@@ -168,6 +190,11 @@ async function fetchPuzzle(req) {
       const diff = req.difficulty || "medium";
       const r = await api(`/api/daily?difficulty=${encodeURIComponent(diff)}&date=${encodeURIComponent(req.date || "")}`);
       return { data: r.puzzle, id: r.id, src: { type: "daily", ...r.daily } };
+    }
+    if (req.type === "arch") {
+      const a = req.data ? req : store.get("zip-arch", null);
+      if (!a || !a.puzzle && !a.data) throw new Error("no Architect puzzle yet");
+      return { data: a.data || a.puzzle, id: a.id || null, src: { type: "arch", rating: a.rating || null } };
     }
     if (req.type === "custom") {
       const r = await api(`/api/custom/${encodeURIComponent(req.id)}`);
@@ -198,6 +225,7 @@ function solveFor(bot) {
     const t0 = performance.now();
     let r;
     if (bot.mode === "exact") r = await api("/api/solve/exact", { puzzle: data, time_limit: NERD.time, trace: true });
+    else if (bot.mode === "robot") r = await api("/api/solve/robot", { puzzle: data, robot: bot.robot, time_limit: Math.min(NERD.time, 20), trace: true });
     else r = await api("/api/solve/rl", { puzzle: data, mode: bot.mode, model: bot.model || null, budget: NERD.budget, time_limit: NERD.time, compare: false, trace: bot.mode !== "greedy" });
     r.wall = (performance.now() - t0) / 1000;
     return r;
@@ -219,6 +247,12 @@ function buildTicks(res, P) {
   if (Array.isArray(res.trace) && res.trace.length) {
     let first = true;
     for (const e of res.trace) {
+      if (e && typeof e === "object") {   // new robots: captions, whole-line candidates, search-tree snapshots
+        if (e.t === "note" && e.msg) ticks.push({ t: "note", msg: e.msg, kind: e.kind || "", cells: e.cells || null });
+        else if (e.t === "path" && Array.isArray(e.p)) ticks.push({ t: "set", p: e.p });
+        else if (e.t === "tree") ticks.push({ t: "tree", ev: e });
+        continue;
+      }
       if (e === "R") { if (!first) ticks.push({ t: "reset" }); first = false; continue; }
       first = false;
       if (e >= 0) { if (e === start && (!ticks.length || ticks[ticks.length - 1].t === "reset")) continue; ticks.push({ t: "push", v: e }); }
@@ -239,7 +273,7 @@ class Lane {
     this.stack = [P.cps[0]];
     this.onStack = new Uint8Array(P.n); this.onStack[P.cps[0]] = 1;
     this.tried = new Float32Array(P.n);
-    this.tries = 0; this.deadEnds = 0; this.resets = 0; this.sincePop = 0;
+    this.tries = 0; this.deadEnds = 0; this.resets = 0; this.sincePop = 0; this.gens = 0; this.notes = 0; this.noteBudget = 24000;
     this.done = false; this.dirty = true; this.cand = null;
     this.reached = 1;
   }
@@ -258,6 +292,18 @@ class Lane {
       for (const v of gone) { this.onStack[v] = 0; this.tried[v] = 1; if (P.cpIndex.has(v)) this.reached = Math.min(this.reached, P.cpIndex.get(v)); }
       this.deadEnds++; this.sincePop = 0;
       if (!quiet) this.onEvent("pop", { k: gone.length });
+    } else if (t.t === "note") {
+      this.notes++;
+      if (!quiet || this.holds) this.onEvent("note", t);
+    } else if (t.t === "set") {
+      const p = t.p.length ? t.p.slice() : [P.cps[0]];
+      for (const v of this.stack) this.onStack[v] = 0;
+      this.stack = p; for (const v of p) this.onStack[v] = 1;
+      let r = 0; for (const v of p) { const k = P.cpIndex.get(v); if (k === r) r++; }
+      this.reached = Math.max(1, r); this.gens++; this.tries++;
+      this.onEvent("gen", { n: this.gens, len: p.length });
+    } else if (t.t === "tree") {
+      if (!quiet) this.onEvent("tree", t.ev);
     } else if (t.t === "reset") {
       for (const v of this.stack.slice(1)) { this.onStack[v] = 0; this.tried[v] = 0.7; }
       this.stack = [P.cps[0]]; this.reached = 1; this.resets++; this.sincePop = 0;
@@ -270,6 +316,22 @@ class Lane {
     let applied = 0;
     while (applied < n && this.i < this.ticks.length) {
       const t = this.ticks[this.i];
+      if (this.holds && t.t === "note" && speed < 5) {
+        // a caption: stop and let people read it (the Detective's notes are the show); a budget keeps chatty
+        // robots (the Gambler talks before every move) from turning the show into a lecture
+        this.i++; applied++;
+        this.apply(t, false);
+        const want = clamp(t.msg.length * 42, 1100, 3400), d = this.noteBudget > 0 ? want : Math.min(want, 260);
+        this.noteBudget -= want;
+        this.holdUntil = now + d / speed;
+        break;
+      }
+      if (this.holds && t.t === "set" && speed < 5 && this.bot && (this.bot.gens || this.bot.flourish)) {
+        this.i++; applied++;
+        this.apply(t, false);
+        this.holdUntil = now + (this.bot.flourish ? 1400 : 520) / speed;
+        break;
+      }
       if (this.holds && t.t === "pop" && !this.held && this.holdBudget > 0 && speed < 5) {
         this.held = true;
         const d = 520 / speed;
@@ -407,16 +469,17 @@ async function openStage(req, { push = false, autostart = false, bot = null } = 
   try { pz = await fetchPuzzle(req); }
   catch (e) { toast(`Couldn't load a puzzle: ${e.message}`); return; }
   setPuzzle(pz);
+  if (S.P.coop) { toast("Co-op is for humans 👯 Pick another puzzle!"); goPick(null); return; }
   // default star: the Scout (it backs out of dead ends: the best show); on 3D the Grandmaster (never gives up)
   if (bot && botById(bot)) { S.bot = bot; S.botChosen = true; }
-  else if (!S.botChosen) S.bot = S.P.dim >= 3 ? "grandmaster" : "scout";
+  else if (!S.botChosen) S.bot = pz.src.type === "mode" && MODES[pz.src.mode].more ? "detective" : S.P.dim >= 3 ? "grandmaster" : "scout";
   if (!botById(S.bot) || botById(S.bot).off) S.bot = CAST.find((b) => !b.off).id;
   showScreen("stage");
   $("sTitle").textContent = S.title[0]; $("sSub").textContent = S.title[1];
   document.title = `${S.title[0]} · AI show · Zip`;
   setHash(`#watch&${srcHash(pz.src)}&bot=${S.bot}`, push);
   $("beatBtn").href = beatLink(pz.src);
-  board = new Board($("boardHost"), { maxCell: 80, label: "The robot's board" });
+  board = new (S.P.cube ? CubeBoard : Board)($("boardHost"), { maxCell: 80, label: "The robot's board" });
   board.setPuzzle(S.P);
   S.lastLane = null; S.deckH = 0;
   setDeck("pre");
@@ -454,6 +517,7 @@ function setDeck(state) {
 }
 function resetBoard() {
   S.lastLane = null;
+  hideTree();
   if (!board || !board.svg) return;
   clearGlow(board);
   board.render({ path: [S.P.cps[0]], legal: [], animate: false });
@@ -511,6 +575,8 @@ async function watch() {
       caption(heatCaption(P, pol.heat, [P.cps[0]]), { force: true, prio: 3, mood: "thinking" });
       await sleep(1500);
     } catch { await sleep(700); }
+  } else if (bot.mode === "robot") {
+    await sleep(600);   // its own first note introduces it
   } else {
     await sleep(700);
     if (!alive()) return;
@@ -526,7 +592,8 @@ async function watch() {
     clearTimeout(slow);
     if (!alive()) return;
     const noModel = e.status === 404 || e.status === 503;
-    caption(noModel ? "My brain is missing! 🔌 Try the Tortoise." : `Short circuit! 🔌 ${e.message}`, { force: true, mood: "sad" });
+    if (bot.mode === "robot" && e.status === 404) caption("I haven't studied this puzzle yet 📚 Try another one!", { force: true, mood: "sad" });
+    else caption(noModel ? "My brain is missing! 🔌 Try the Tortoise." : `Short circuit! 🔌 ${e.message}`, { force: true, mood: "sad" });
     setDeck("pre"); S.watch = null; return;
   }
   clearTimeout(slow);
@@ -537,11 +604,12 @@ async function watch() {
   lane.mpt = clamp(clamp(T * 115, 3800, 16000) / T, 2, 140);
   caption(pickLine(LINES.go), { force: true, mood: "going", prio: 2 });
   if (bot.brain) lookLoop(W, bot);
-  W.drv = drive([lane], { onFrame: () => { $("triesN").textContent = fmtInt(lane.tries); $("triesL").textContent = lane.tries === 1 ? "try" : "tries"; } });
+  const cnt = () => bot.gens ? [lane.gens, lane.gens === 1 ? "generation" : "generations"] : [lane.tries, lane.tries === 1 ? "try" : "tries"];
+  W.drv = drive([lane], { onFrame: () => { const [n, l] = cnt(); $("triesN").textContent = fmtInt(n); $("triesL").textContent = l; } });
   const finished = await W.drv.done;
   if (!alive() || !finished) return;
-  $("triesN").textContent = fmtInt(lane.tries);
-  W.heat = null; clearGlow(board);
+  $("triesN").textContent = fmtInt(bot.gens ? lane.gens : lane.tries);
+  W.heat = null; clearGlow(board); hideTree();
   await celebrate(W, lane, res, bot);
 }
 async function lookLoop(W, bot) {
@@ -576,6 +644,7 @@ function onWatchEvent(W, type, info) {
       caption(pickLine(LINES.cp(info.k + 1)), { prio: 2, mood: "going" });
     } else {
       sound.note(idx - 1, { seed: S.P.n });
+      if (L.treeAt && L.stack.length - L.treeAt > 2) { L.treeAt = 0; clearGlow(b); }
       if (p && S.speed < 5) fx.sparks(p.x, p.y, col, 2);
       if (L.sincePop === 14) caption(pickLine(LINES.smooth), { mood: "going" });
       if ([100, 500, 1000, 5000, 20000].includes(L.tries)) caption(pickLine(LINES.many(L.tries)), { prio: 2 });
@@ -590,7 +659,58 @@ function onWatchEvent(W, type, info) {
   } else if (type === "reset") {
     sound.whoosh();
     caption(pickLine(LINES.reset), { prio: 3, mood: "confused", ms: 1500 });
-  }
+  } else if (type === "note") {
+    // the robot's own words, as a speech bubble; the cells it talks about glow
+    const mood = /guess|stuck|dead|wrong|back/.test(info.kind) ? "confused" : /done|solved|win/.test(info.kind) ? "win" : "thinking";
+    caption(info.msg, { force: true, prio: 4, mood, ms: clamp(info.msg.length * 42, 1100, 3400) });
+    $("cap").classList.toggle("long", info.msg.length > 70);
+    sound.note(L.notes % 7, { seed: 11 });
+    if (info.cells && info.cells.length) { W.heat = Object.fromEntries(info.cells.map((v) => [v, 1])); drawGlow(b, W.heat, null); }
+    else if (W.heat && !L.bot.brain) { W.heat = null; clearGlow(b); }
+  } else if (type === "gen") {
+    // a whole new candidate line: the Evolver's generations wriggle, the Mathematician's answer flourishes in
+    const svg = b.svg;
+    if (L.bot.flourish && !reducedMotion()) {
+      const n = b.segs.length;
+      b.segs.forEach((sg, i) => { if (!sg) return; sg.style.animationDelay = `${(i * 900) / Math.max(1, n)}ms`; sg.classList.remove("flourish"); void sg.getBBox(); sg.classList.add("flourish"); });
+      sound.win();
+    } else if (!reducedMotion()) {
+      svg.classList.remove("wriggle"); void svg.getBBox(); svg.classList.add("wriggle");
+      sound.note(info.n % 8, { seed: 5 });
+    }
+  } else if (type === "tree") { L.treeAt = L.stack.length; drawTree(b, info); }
+}
+
+// ------------------------------------------------------------------ the Sage's search tree (mini view + glow on its candidate moves)
+function hideTree() { if (board) clearGlow(board); }
+function drawTree(b, ev) {
+  // branches grow from the line's head to the moves being weighed (thicker = more simulated futures), with a
+  // second ring of twigs for the replies; drawn right on the board, in the glow layer
+  if (!b || !b.svg || !b.gHeat || !ev || !Array.isArray(ev.nodes)) return;
+  const g = b.gHeat, cs = b.L.cs, P = b.P;
+  g.textContent = "";
+  const head = ev.head !== undefined ? ev.head : null;
+  if (head == null || head >= P.n) return;
+  const kids = ev.nodes.filter((k) => k && k.node !== undefined && k.node < P.n).sort((x, y) => (y.n || 0) - (x.n || 0)).slice(0, 5);
+  const tot = Math.max(1, ...kids.map((k) => k.n || 0));
+  const col = (q) => `hsl(${Math.round(25 + 105 * Math.max(0, Math.min(1, q ?? 0.5)))} 70% 45%)`;
+  const branch = (u, v, w, c, cls, delay) => {
+    const [x1, y1] = b.center(u), [x2, y2] = b.center(v);
+    const mx = (x1 + x2) / 2 + (y2 - y1) * 0.18, my = (y1 + y2) / 2 - (x2 - x1) * 0.18;
+    el("path", { d: `M${x1},${y1} Q${mx},${my} ${x2},${y2}`, fill: "none", stroke: c, "stroke-width": w, "stroke-linecap": "round", pathLength: 1, class: cls, style: `animation-delay:${delay}ms` }, g);
+  };
+  kids.forEach((k, i) => {
+    const f = Math.sqrt((k.n || 0) / tot);
+    for (const [j, gk] of (k.kids || []).slice(0, 3).entries()) {
+      if (gk.node === undefined || gk.node >= P.n) continue;
+      branch(k.node, gk.node, Math.max(1.5, cs * 0.05 * (0.4 + Math.sqrt((gk.n || 0) / tot))), col(gk.q), "twig", 250 + i * 60 + j * 40);
+      const [x, y] = b.center(gk.node);
+      el("circle", { cx: x, cy: y, r: cs * 0.07, fill: col(gk.q), class: "leaf", style: `animation-delay:${400 + i * 60}ms` }, g);
+    }
+    branch(head, k.node, Math.max(2, cs * (0.05 + 0.13 * f)), col(k.q), "branch", i * 60);
+    const [x, y] = b.center(k.node);
+    el("circle", { cx: x, cy: y, r: cs * (0.1 + 0.12 * f), fill: col(k.q), stroke: "#fff", "stroke-width": 1.5, class: "leaf", style: `animation-delay:${200 + i * 60}ms` }, g);
+  });
 }
 async function celebrate(W, lane, res, bot) {
   const P = S.P;
@@ -602,10 +722,17 @@ async function celebrate(W, lane, res, bot) {
     sound.win();
     setMood($("sBot"), "win");
     const clean = lane.deadEnds === 0 && lane.resets === 0;
-    caption(clean ? "Got it. No wrong turns! 🎉" : `Got it in ${fmtInt(lane.tries)} tries! 🎉`, { force: true, prio: 5, ms: 99999 });
+    caption(bot.mode === "robot" ? bot.say.win : clean ? "Got it. No wrong turns! 🎉" : `Got it in ${fmtInt(lane.tries)} tries! 🎉`, { force: true, prio: 5, ms: 99999 });
+    $("cap").classList.remove("long");
     await cinematic(board, lane.stack);
     stats.push(`⚡ ${tm} of thinking`);
-    if (!clean) stats.push(`↩ ${fmtInt(lane.deadEnds)} dead end${lane.deadEnds === 1 ? "" : "s"} escaped`);
+    const st = res.stats || {};
+    if (bot.id === "detective" && st.deduced_frac != null) stats.push(`🔍 ${Math.round(st.deduced_frac * 100)}% of moves deduced${st.guesses ? `, ${st.guesses} guess${st.guesses === 1 ? "" : "es"}` : ""}`);
+    else if (bot.id === "evolver") stats.push(`🧬 ${fmtInt(st.generations ?? lane.gens)} generation${(st.generations ?? lane.gens) === 1 ? "" : "s"}`);
+    else if (bot.id === "sat" && st.variables) stats.push(`🧮 ${fmtInt(st.variables)} variables, ${fmtInt(st.clauses)} clauses`);
+    else if (bot.id === "mcts" && st.simulations != null) stats.push(`🌳 ${fmtInt(st.simulations)} futures imagined`);
+    else if (bot.id === "gambler" && st.rollouts != null) stats.push(`🎲 ${fmtInt(st.rollouts)} bets placed`);
+    else if (!clean) stats.push(`↩ ${fmtInt(lane.deadEnds)} dead end${lane.deadEnds === 1 ? "" : "s"} escaped`);
     else if (steps && bot.brain) stats.push(`🎯 Sure about ${sure} of ${steps} moves`);
     else stats.push(`🧠 ${fmtInt(lane.tries)} tries`);
   } else {
@@ -614,7 +741,7 @@ async function celebrate(W, lane, res, bot) {
     const why = res.status === "budget" || res.status === "timeout" ? "I give up. Too many dead ends 😵" : bot.mode === "greedy" ? "Uh-oh… I'm stuck 😵" : "No way through… 😵";
     caption(why, { force: true, prio: 5, ms: 99999 });
     stats.push(`🧩 Filled ${lane.stack.length} of ${P.n} squares`);
-    stats.push(bot.mode === "greedy" ? "🐣 Rookie never backs up. Try 🦉!" : `🧠 ${fmtInt(lane.tries)} tries in ${tm}`);
+    stats.push(bot.mode === "greedy" ? "🐣 Rookie never backs up. Try 🦉!" : bot.gens ? `🧬 ${fmtInt(lane.gens)} generations in ${tm}` : `🧠 ${fmtInt(lane.tries)} tries in ${tm}`);
   }
   $("stats").innerHTML = stats.map((s) => `<span class="pill-s">${s}</span>`).join("");
   S.watch = null;
@@ -674,7 +801,7 @@ function buildLanes() {
     const prog = h("div", { class: "l-prog", "aria-hidden": "true" }, h("i"));
     const tries = h("div", { class: "l-tries" }, h("span", { class: "mono" }, "0"), " tries");
     host.append(h("div", { class: "l-head" }, av, name), say, bh, prog, tries);
-    const b = new Board(bh, { maxCell: 60, label: `${bot.name}'s board` });
+    const b = new (S.P.cube ? CubeBoard : Board)(bh, { maxCell: 60, label: `${bot.name}'s board` });
     b.setPuzzle(S.P);
     lanesUI[side] = { host, bot, say, bh, prog: prog.firstChild, tries: tries.firstChild, board: b, av };
   });
@@ -777,8 +904,10 @@ async function race() {
   if (!alive()) return;
   raceResult(us, winner);
 }
-function onRaceEvent(u, type) {
+function onRaceEvent(u, type, info) {
   const L = u.lane;
+  if (type === "note") { const m = info.msg.length > 64 ? info.msg.slice(0, 62) + "…" : info.msg; laneSay(u, m, "thinking"); return; }
+  if (type === "gen") { if (u.board.svg && !reducedMotion()) { u.board.svg.classList.remove("wriggle"); void u.board.svg.getBBox(); u.board.svg.classList.add("wriggle"); } return; }
   if (type === "pop" && L.deadEnds % 3 === 1) laneSay(u, u.bot.say.back || "oops…", "confused");
   else if (type === "reset") laneSay(u, "start over! 🔄", "confused");
   else if ((type === "push" || type === "cp") && L.sincePop === 1 && L.deadEnds) laneSay(u, pickLine(u.bot.say.go), "going");
@@ -825,6 +954,76 @@ function openPicker(side) {
 let lastFocus = null;
 function openSheet(id) { lastFocus = document.activeElement; $(id).hidden = false; requestAnimationFrame(() => $(id).classList.add("show")); setTimeout(() => { const f = $(id).querySelector("button"); if (f) f.focus({ preventScroll: true }); }, 60); }
 function closeSheet(id) { const s = $(id); if (s.hidden) return; s.classList.remove("show"); s.hidden = true; if (lastFocus && lastFocus.focus) lastFocus.focus({ preventScroll: true }); }
+
+// ------------------------------------------------------------------ 😈 the Architect (POST /api/architect/design)
+const ARCH_LINES = ["Hmm… something devious…", "Hiding a trap in a corner 😏", "Removing clues you'll miss…", "Is it fair? Checking…",
+  "Only ONE way through. Muahaha", "Making the numbers lie a little", "Polishing the evil bits ✨", "Asking the solver to double-check…"];
+let archTok = 0, archBoard = null;
+function archPreview(on) {
+  // "designing…": a grid whose cells flicker while numbers hop around
+  const host = $("arBoard");
+  if (!on) return;
+  host.innerHTML = "";
+  const g = h("div", { class: "ar-grid" });
+  for (let i = 0; i < 49; i++) g.appendChild(h("i", { style: `animation-delay:${((i * 37) % 23) * -0.09}s` }));
+  host.appendChild(g);
+  const nums = [];
+  for (let k = 1; k <= 6; k++) { const n = h("b", { class: "ar-num" }, String(k)); g.appendChild(n); nums.push(n); }
+  const hop = () => {
+    const cells = Array.from({ length: 49 }, (_, i) => i).sort(() => Math.random() - 0.5);
+    nums.forEach((n, i) => { const c = cells[i]; n.style.left = `${(c % 7) * (100 / 7)}%`; n.style.top = `${Math.floor(c / 7) * (100 / 7)}%`; });
+  };
+  hop();
+  return hop;
+}
+async function askArchitect() {
+  const tok = ++archTok;
+  $("arTitle").textContent = "Designing…";
+  $("arRow").innerHTML = "";
+  $("arBtns").hidden = true; $("arWait").hidden = false;
+  $("arAv").className = "ar-av ar-busy";
+  openSheet("arch");
+  const hop = archPreview(true);
+  let li = 0;
+  const say = (t) => { $("arSay").textContent = t; $("arSay").classList.remove("pop"); void $("arSay").offsetWidth; $("arSay").classList.add("pop"); };
+  say(ARCH_LINES[0]);
+  const tick = setInterval(() => { if (tok !== archTok) return clearInterval(tick); li = (li + 1) % ARCH_LINES.length; if (li === 0) li = 1; say(ARCH_LINES[li]); hop && hop(); sound.note(li, { seed: 13 }); }, 1500);
+  let r = null, err = null;
+  try { r = await api("/api/architect/design", { kind: "classic", size: 7, target: "expert", time_budget: 10 }); } catch (e) { err = e; }
+  clearInterval(tick);
+  if (tok !== archTok) return;
+  $("arAv").className = "ar-av";
+  if (err && (err.status === 404 || err.status === 501)) {   // no Architect on this server (yet)
+    archTok++; closeSheet("arch"); $("archCard").hidden = true; toast("The Architect is away today 😈"); return;
+  }
+  if (!r || !r.puzzle) {
+    say(err && err.status === 422 ? "Bah! Nothing evil enough in time. Again?" : "My drafting table broke 🔧");
+    $("arTitle").textContent = "Hmm…";
+    $("arWait").hidden = true; $("arBtns").hidden = false; $("arPlay").hidden = true; $("arBot").hidden = true;
+    return;
+  }
+  const a = { puzzle: r.puzzle, id: r.id || null, rating: r.rating || null };
+  store.set("zip-arch", a);
+  // reveal the design
+  $("arBoard").innerHTML = "";
+  archBoard = new Board($("arBoard"), { maxCell: 40, label: "The Architect's puzzle" });
+  archBoard.setPuzzle(makeModel(r.puzzle));
+  const w = Math.min(260, innerWidth - 90);
+  archBoard.build(w, w);
+  archBoard.render({ path: [], legal: [], animate: false });
+  archBoard.svg.classList.add("ar-reveal");
+  sound.levelUp(3);
+  const st = r.stats || {}, rt = r.rating || {};
+  $("arTitle").textContent = rt.label ? `${/^[aeiou]/i.test(rt.label) ? "An" : "A"} ${rt.label.toLowerCase()} one` : "Done!";
+  say(pickLine(["Here. Good luck. You'll need it 😈", "Exactly one way through. Find it 😏", "I removed every clue I could. Enjoy!"]));
+  const rows = [];
+  if (r.puzzle.checkpoints) rows.push(`🔢 ${r.puzzle.checkpoints.length} clues`);
+  if (st.evaluations) rows.push(`🧪 ${fmtInt(st.evaluations)} designs tested`);
+  if (st.rejected_unfair) rows.push(`🚫 ${fmtInt(st.rejected_unfair)} unfair ones thrown out`);
+  $("arRow").innerHTML = rows.map((x) => `<span class="pill-s">${x}</span>`).join("");
+  $("arWait").hidden = true; $("arBtns").hidden = false; $("arPlay").hidden = false; $("arBot").hidden = false;
+  $("arPlay").href = `${PAGES.home}#arch`;
+}
 
 // ------------------------------------------------------------------ nerd mode
 function paintNerd() {
@@ -891,6 +1090,7 @@ async function route(hash, push = false) {
   const seed = q.get("seed") && /^\d+$/.test(q.get("seed")) ? Number(q.get("seed")) : null;
   let req = null;
   if (q.get("custom")) req = { type: "custom", id: q.get("custom") };
+  else if (q.has("arch")) req = { type: "arch" };
   else if (q.get("daily")) req = { type: "daily", difficulty: q.get("daily"), date: q.get("date") || "" };
   else if (q.get("play") && MODES[q.get("play")]) req = { type: "mode", mode: q.get("play"), diff: q.get("diff") || MODES[q.get("play")].dflt, seed };
   if (q.has("vs")) {
@@ -907,6 +1107,7 @@ document.addEventListener("keydown", (ev) => {
   if (ev.key === "Escape") {
     if (!$("menu").hidden) { closeMenu(); $("menuBtn").focus(); ev.preventDefault(); return; }
     if (!$("picker").hidden) { closeSheet("picker"); ev.preventDefault(); return; }
+    if (!$("arch").hidden) { archTok++; closeSheet("arch"); ev.preventDefault(); return; }
     if (S.screen !== "pick") { goPick(true); ev.preventDefault(); }
     return;
   }
@@ -924,6 +1125,27 @@ async function init() {
   paintSound();
   const A = modeArt(ROBOTS);
   document.querySelectorAll("[data-art]").forEach((e) => { e.innerHTML = A[e.dataset.art] || ""; });
+  // the new puzzle types (not co-op: that one is for two humans); the strategy robots handle them all
+  Object.entries(MORE).forEach(([id, m], i) => {
+    if (id === "coop") return;
+    $("more").appendChild(h("button", { type: "button", class: `mcard mc-${id}`, role: "listitem", "data-pick": id, style: `--i:${i}`, "aria-label": `Watch a robot solve ${m.label}` },
+      h("span", { class: "mc-art", "aria-hidden": "true", html: A[id] || "" }),
+      h("span", { class: "mc-name" }, h("span", { class: "mc-emo", "aria-hidden": "true" }, m.emoji), m.label),
+      h("span", { class: "mc-sub" }, m.sub)));
+  });
+  if (STATIC) {   // online: only the types the puzzle bank has pools for
+    api("/api/bank").then((r) => {
+      const pools = (r && r.modes) || {};
+      let any = false;
+      for (const id of Object.keys(MORE)) {
+        const b = document.querySelector(`#more .mc-${id}`);
+        if (!b) continue;
+        const [pm] = modePool(id) || [];
+        b.hidden = !pools[pm]; any = any || !b.hidden;
+      }
+      $("more").hidden = !any; $("moreHead").hidden = !any;
+    }).catch(() => { $("more").hidden = true; $("moreHead").hidden = true; });
+  }
   heroArt();
   const cd = store.get("zip-classic-diff", "medium");
   document.querySelectorAll(".m-classic .diff").forEach((b) => b.classList.toggle("on", b.dataset.diff === cd));
@@ -974,6 +1196,11 @@ async function init() {
     S.speed = Number(v); setSpeedUI(S.speed);
   }));
   $("pkClose").onclick = () => closeSheet("picker");
+  $("archGo").onclick = () => askArchitect();
+  $("arAgain").onclick = () => askArchitect();
+  $("arCancel").onclick = () => { archTok++; closeSheet("arch"); };
+  $("arBot").onclick = () => { const a = store.get("zip-arch", null); closeSheet("arch"); if (a) openStage({ type: "arch", data: a.puzzle, id: a.id, rating: a.rating }, { push: true, bot: S.botChosen ? S.bot : "detective" }); };
+  $("arch").addEventListener("click", (e) => { if (e.target === $("arch")) { archTok++; closeSheet("arch"); } });
   $("picker").addEventListener("click", (e) => { if (e.target === $("picker")) closeSheet("picker"); });
 
   window.addEventListener("zip-theme", () => { if (S.screen === "stage") layoutStage(); if (S.screen === "faceoff") layoutLanes(); });

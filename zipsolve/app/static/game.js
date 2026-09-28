@@ -1,10 +1,11 @@
 // Zip — the casual game page (/). Home (daily + modes), a big-board game shell, "Show me" robot solves,
 // Race the robot, and a first-visit tutorial. The AI show lives at /lab (show.js).
-import { $, h, api, PAGES, fmtTime, store, icon, localDateISO, addDays, clamp, sleep, reducedMotion, cssVar } from "./play/util.js";
+import { $, h, api, PAGES, STATIC, fmtTime, store, icon, localDateISO, addDays, clamp, sleep, reducedMotion, cssVar, esc } from "./play/util.js";
 import { Board, makeModel } from "./play/board.js";
-import { MODES, ROBOTS, genParams, modeArt } from "./play/modes.js";
+import { MODES, MORE, ROBOTS, genParams, modeArt, modePool } from "./play/modes.js";
 import { sound } from "./play/sound.js";
-import { PathGame } from "./play/rules.js";
+import { PathGame, CoopGame } from "./play/rules.js";
+import { CubeBoard } from "./play/cubeview.js";
 import { createFx } from "./play/fx.js";
 
 // ------------------------------------------------------------------ content
@@ -123,6 +124,7 @@ function renderHome() {
   s.innerHTML = `<span class="flame" aria-hidden="true">🔥</span>${st.current}`;
   s.title = `${st.current}-day streak`;
   s.setAttribute("aria-label", `${st.current}-day streak`);
+  paintWeekly();
   const cd = store.get("zip-classic-diff", "medium");
   document.querySelectorAll(".m-classic .diff").forEach((b) => b.classList.toggle("on", b.dataset.diff === cd));
 }
@@ -137,6 +139,67 @@ function buildArt() {
   hd.innerHTML = [[18, 18, 1], [102, 46, 2], [18, 74, 3], [18, 102, 4]].map(([x, y, k]) => `<g transform="translate(${x} ${y})"><circle r="8.5"/><text y="3.6" text-anchor="middle">${k}</text></g>`).join("");
 }
 
+// ------------------------------------------------------------------ 😈 this week's Architect challenge (bank/architect/weekly.json)
+function isoWeek(d = new Date()) {
+  const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  t.setUTCDate(t.getUTCDate() + 4 - (t.getUTCDay() || 7));
+  const y = t.getUTCFullYear();
+  return `${y}-W${String(Math.ceil(((t - Date.UTC(y, 0, 1)) / 86400000 + 1) / 7)).padStart(2, "0")}`;
+}
+let WEEKLY = null;
+async function checkWeekly() {
+  try { WEEKLY = await api(`/api/architect/weekly?week=${isoWeek()}`); } catch { WEEKLY = null; }
+  paintWeekly();
+}
+function paintWeekly() {
+  const b = $("weekly");
+  if (!b) return;
+  b.hidden = !(WEEKLY && WEEKLY.puzzle);
+  if (b.hidden) return;
+  const w = WEEKLY.weekly || {}, done = (store.get("zip-weekly", {}) || {})[w.week];
+  const lab = (WEEKLY.rating && WEEKLY.rating.label) || w.label || "";
+  $("weeklySub").textContent = done ? `Solved in ${fmtTime(done.ms)} · see you next week` : `${lab ? `${lab} · ` : ""}No guessing needed. Can you crack it?`;
+  b.classList.toggle("done", !!done);
+}
+function playWeekly(week = isoWeek(), push = false) {
+  return fetchAndLoad(() => api(`/api/architect/weekly?week=${encodeURIComponent(week)}`), (res) => ({ type: "weekly", week: (res.weekly && res.weekly.week) || week }),
+    (res) => `#weekly=${(res.weekly && res.weekly.week) || week}`, push);
+}
+
+// ------------------------------------------------------------------ more modes (new puzzle types)
+// A mode shows only when something can serve it: a bank pool (static site / server) or a generator kind (server).
+const AVAIL = {};
+function buildMore() {
+  const box = $("more");
+  box.innerHTML = "";
+  const A = modeArt(ROBOTS);
+  Object.entries(MORE).forEach(([id, m], i) => {
+    box.appendChild(h("button", { type: "button", class: `mcard mc-${id}`, role: "listitem", "data-play": id, style: `--i:${i}`, "aria-label": `Play ${m.label}: ${m.sub}` },
+      h("span", { class: "mc-art", "aria-hidden": "true", html: A[id] || "" }),
+      h("span", { class: "mc-name" }, h("span", { class: "mc-emo", "aria-hidden": "true" }, m.emoji), m.label),
+      h("span", { class: "mc-sub" }, m.sub)));
+  });
+}
+async function checkMore() {
+  // the local server generates every kind it knows (a mode that turns out unknown hides itself on first use);
+  // the static site can only serve what its puzzle bank has
+  if (!STATIC) { paintMore(); return; }
+  let pools = {};
+  try { const r = await api("/api/bank"); pools = (r && r.modes) || {}; } catch { pools = {}; }
+  for (const id of Object.keys(MORE)) { const [pm] = modePool(id) || []; AVAIL[id] = !!pools[pm]; }
+  paintMore();
+}
+function paintMore() {
+  let any = false;
+  for (const id of Object.keys(MORE)) {
+    const b = document.querySelector(`.mc-${id}`);
+    if (!b) continue;
+    const ok = AVAIL[id] !== false;
+    b.hidden = !ok; any = any || ok;
+  }
+  $("more").hidden = !any; $("moreHead").hidden = !any;
+}
+
 // ------------------------------------------------------------------ puzzle loading
 // rating: the puzzle's human difficulty ({label, score} from the bank or the server's rater), shown instead of the
 // nominal difficulty so "Hard" means hard
@@ -144,6 +207,9 @@ function titleFor(src, d, rating = null) {
   const shape = d.meta && d.meta.shape ? d.meta.shape.join("×") : "";
   const real = rating && rating.label;
   if (src.type === "daily") return [`Zip #${src.number}`, src.difficulty === "special" ? `Sunday special${real ? ` · ${real}` : ""}` : `Daily · ${real || src.label}`];
+  if (src.type === "mode" && MORE[src.mode]) return [`${MORE[src.mode].emoji} ${MORE[src.mode].label}`, real ? `${MORE[src.mode].sub} · ${real}` : MORE[src.mode].sub];
+  if (src.type === "arch") return ["😈 Architect's puzzle", real ? `Designed for you · ${real}` : "Designed for you"];
+  if (src.type === "weekly") return ["😈 Weekly challenge", real ? `By the Architect · ${real}` : "By the Architect"];
   if (src.type === "mode") {
     const m = MODES[src.mode], df = m.diffs[src.diff];
     const isl = d.meta && d.meta.island ? new Set(d.meta.island).size : 0;
@@ -157,12 +223,14 @@ function titleFor(src, d, rating = null) {
 }
 function loadPuzzle(res, src) {
   G.animTok++; G.animating = false;
-  const d = res.puzzle;
+  let d = res.puzzle;
+  const df = src.type === "mode" && MODES[src.mode] ? MODES[src.mode].diffs[src.diff] : null;
+  if (df && df.fog && !(d.meta && d.meta.fog)) d = { ...d, meta: { ...(d.meta || {}), fog: true } };
   G.data = d; G.id = res.id || null; G.src = src;
   G.P = makeModel(d);
+  ensureEngine(G.P);
   G.seed = res.seed ?? (d.checkpoints.reduce((a, b) => a * 31 + b, 7) >>> 0);
   G.t0 = null; G.tEnd = null; G.hints = 0; G.undos = 0; G.assisted = false; G.won = false; G.hint = null; G.combo = 0; G.bad = 0;
-  board.setPuzzle(G.P);
   game.setPuzzle(G.P);
   game.locked = false;
   G.rating = res.rating || null;
@@ -171,7 +239,9 @@ function loadPuzzle(res, src) {
   $("gSub").title = G.rating && G.rating.score != null ? `Difficulty ${Math.round(G.rating.score)}/100 (rated by how much a person has to think ahead)` : "";
   document.title = t.startsWith("Zip") ? t : `${t} · Zip`;
   document.body.classList.toggle("racing", src.type === "race");
-  document.body.classList.toggle("dim3", G.P.dim >= 3);
+  document.body.classList.toggle("dim3", deep());
+  document.body.classList.toggle("coop", !!G.P.coop);
+  paintPens();
   $("raceStrip").hidden = src.type !== "race";
   closeSheet();
   showScreen("game");
@@ -180,7 +250,9 @@ function loadPuzzle(res, src) {
   coach("");
   layout();
   setupView();
-  if (src.type !== "race" && !store.get("zip-first-hint", false)) { coach("Start at <b>1</b> and drag ✍️", 3500); store.set("zip-first-hint", true); }
+  const more = src.type === "mode" && MORE[src.mode];
+  if (more && !store.get(`zip-tip-${src.mode}`, false)) { coach(more.tip, 4200); store.set(`zip-tip-${src.mode}`, true); }
+  else if (src.type !== "race" && !store.get("zip-first-hint", false)) { coach("Start at <b>1</b> and drag ✍️", 3500); store.set("zip-first-hint", true); }
 }
 
 let loaderT = null;
@@ -202,7 +274,10 @@ async function fetchAndLoad(fn, src, hash, push) {
     if (push) G.cameFromHome = true;
     return true;
   } catch (e) {
-    toast(`Couldn't load a puzzle: ${e.message}`);
+    const src0 = typeof src === "function" ? null : src;
+    if (src0 && src0.type === "mode" && MORE[src0.mode] && (e.status === 400 || e.status === 404 || e.status === 501)) {
+      AVAIL[src0.mode] = false; paintMore(); toast(`${MORE[src0.mode].emoji} ${MORE[src0.mode].label} is coming soon ✨`);
+    } else toast(`Couldn't load a puzzle: ${e.message}`);
     if (G.screen !== "game") goHome(null);
     return false;
   } finally { loading(false); }
@@ -240,12 +315,12 @@ function playParams(p, mode, seed, hash) {
 function layout() {
   if (!G.P || G.screen !== "game") return;
   const wrap = $("boardWrap");
-  const dual = G.P.dim >= 3 && G.has3d && innerWidth >= 1000;
-  const show3d = G.P.dim >= 3 && G.has3d && (dual || G.view === "3d");
+  const dual = deep() && G.has3d && innerWidth >= 1000;
+  const show3d = deep() && G.has3d && (dual || G.view === "3d");
   $("v3Host").hidden = !show3d;
   $("boardHost").hidden = show3d && !dual;
   wrap.classList.toggle("dual", dual);
-  $("viewSeg").hidden = !(G.P.dim >= 3 && G.has3d && !dual);
+  $("viewSeg").hidden = !(deep() && G.has3d && !dual);
   wrap.style.flex = ""; wrap.style.height = "";
   const W = wrap.clientWidth, H = wrap.clientHeight;
   if (!$("boardHost").hidden) board.build(dual ? (W - 24) / 2 : W, H);
@@ -261,7 +336,9 @@ function layout() {
 function render(animate = true) {
   if (!G.P || !board.svg) return;
   const legal = G.won ? [] : game.legalMoves();
-  board.render({ path: game.path, won: G.won, legal, showLegal: G.P.dim >= 3 && !G.animating, hint: G.hint, animate: animate && !reducedMotion() });
+  const co = G.P.coop;
+  board.render({ path: co ? game.paths[0] : game.path, path2: co ? game.paths[1] : null, active: co ? game.active : 0, won: G.won, legal,
+    showLegal: (deep() || !!G.P.cube) && !G.animating, hint: G.hint, animate: animate && !reducedMotion() });
   if (view) {
     try { view.update({ path: game.path, legal: G.animating ? [] : legal, hint: G.hint ? G.hint.node : null, stuck: null, colorAt: (i) => board.colorAt(i) }); } catch { /* ignore */ }
   }
@@ -271,22 +348,24 @@ function updateHud() {
   const t = G.t0 == null ? 0 : (G.tEnd || performance.now()) - G.t0;
   $("tTime").textContent = fmtTime(t);
   const n = G.P ? G.P.n : 1;
-  $("gProg").style.width = `${(100 * (game.path.length - 1)) / Math.max(1, n - 1)}%`;
+  const done = G.P && G.P.coop ? game.total - 1 : game.path.length;
+  $("gProg").style.width = `${(100 * (done - 1)) / Math.max(1, n - 1)}%`;
   const lock = G.animating || G.won || (G.race && G.race.phase === "countdown");
   $("undoBtn").disabled = lock || game.path.length <= 1;
-  $("restartBtn").disabled = lock || game.path.length <= 1;
+  $("restartBtn").disabled = lock || done <= 1;
   $("hintBtn").disabled = lock || G.busy;
   $("showMeBtn").disabled = G.animating || G.won;
 }
 setInterval(() => { if (G.screen === "game" && G.t0 != null && !G.tEnd) updateHud(); }, 250);
 
 // ------------------------------------------------------------------ path events -> juice
-function headClient() {
-  const v = game.path[game.path.length - 1];
+function headClient(which) {
+  const p = G.P && G.P.coop && which !== undefined ? game.paths[which] : game.path;
+  const v = p[p.length - 1];
   if (!board.svg || $("boardHost").hidden) return null;
   return board.clientOf(v);
 }
-function onChange({ pushed, popped, cp }) {
+function onChange({ pushed, popped, cp, which }) {
   const now = performance.now();
   if (pushed.length) {
     if (!G.animating) {
@@ -295,12 +374,13 @@ function onChange({ pushed, popped, cp }) {
       G.lastPush = now;
       G.bad = 0;
     }
-    const idx = game.path.length - 1;
-    const col = board.colorAt(idx);
-    const p = headClient();
+    const pth = G.P.coop ? game.paths[which || 0] : game.path;
+    const idx = pth.length - 1;
+    const col = board.colorAt(idx, which || 0);
+    const p = headClient(which);
     if (cp !== undefined) {
       sound.levelUp(cp);
-      if (p) { const q = board.clientOf(G.P.cps[cp]); fx.burst(q.x, q.y, col); }
+      if (p) { const q = board.clientOf(pth[idx]); fx.burst(q.x, q.y, col); }
     } else {
       sound.note(idx - 1, { seed: G.seed, combo: G.combo });
       if (p) fx.sparks(p.x, p.y, col, 2 + Math.round(Math.min(G.combo, 8) / 2), 1 + Math.min(G.combo, 8) / 14);
@@ -313,10 +393,13 @@ function onChange({ pushed, popped, cp }) {
   }
   render(true);
 }
-function onBad(v) {
-  board.flash(v);
+function onBad(v, why, head) {
   sound.bad();
-  if (++G.bad >= 3) { coach("Keep going from the <b>end of your line</b>, in number order 🙂", 3200); G.bad = 0; }
+  if (why === "oneway") { board.nudgeArc && board.nudgeArc(head, v); coach("➡️ One way only!", 1600); return; }
+  if (why === "locked") { board.shakeLock && board.shakeLock(v); board.flash(v); coach("🔒 Grab its 🔑 first", 1800); return; }
+  board.flash(v);
+  if (why === "theirs") { coach(G.P.coop && game.active === 0 ? "That number is 🔵's" : "That number is 🟠's", 1600); return; }
+  if (++G.bad >= 3) { coach(G.P.coop ? "Tap a line's end to pick it up, then keep going 🙂" : "Keep going from the <b>end of your line</b>, in number order 🙂", 3200); G.bad = 0; }
 }
 
 // ------------------------------------------------------------------ win
@@ -327,7 +410,7 @@ async function onFull() {
   render(false);
   if (G.src && G.src.type === "tutorial") return;
   let ok = true;
-  try { ok = (await api("/api/check", { puzzle: G.data, path: game.path })).valid; } catch { /* offline: trust local rules */ }
+  try { ok = (await api("/api/check", G.P.coop ? { puzzle: G.data, path: game.paths[0], paths: game.paths } : { puzzle: G.data, path: game.path })).valid; } catch { /* offline / not supported yet: trust local rules */ }
   if (!ok) { G.won = false; G.tEnd = null; game.locked = false; coach("Hmm, that's not quite it. Try again!", 2500); render(false); return; }
   const tok = G.animTok;
   const ms = G.t0 == null ? 0 : G.tEnd - G.t0;
@@ -337,11 +420,11 @@ async function onFull() {
   showWin(ms);
 }
 async function cinematic() {
-  const path = game.path, n = path.length;
+  const path = G.P.coop ? game.paths[0].concat(game.paths[1]) : game.path, n = path.length;
   sound.win();
   if (reducedMotion()) { await sleep(250); return; }
   const step = Math.min(28, 700 / n);
-  (board.segs || []).forEach((s, i) => { if (!s) return; s.style.animationDelay = `${i * step}ms`; s.classList.remove("lit"); void s.getBBox(); s.classList.add("lit"); });
+  (board.segs || []).concat(board.st2 ? board.st2.segs : []).forEach((s, i) => { if (!s) return; s.style.animationDelay = `${i * step}ms`; s.classList.remove("lit"); void s.getBBox(); s.classList.add("lit"); });
   path.forEach((v, i) => { const t = board.tints[v]; if (!t) return; t.style.animationDelay = `${i * step}ms`; t.classList.add("ripple"); });
   (board.cpEls || []).forEach((g, k) => { const inner = g.firstChild; const i = path.indexOf(G.P.cps[k]); inner.style.animationDelay = `${i * step}ms`; inner.classList.remove("pop"); void inner.getBBox(); inner.classList.add("cheer"); });
   $("boardWrap").classList.add("victory");
@@ -366,6 +449,10 @@ function showWin(ms) {
       r.daily[src.date] = r.daily[src.date] || {};
       if (!r.daily[src.date][src.difficulty]) r.daily[src.date][src.difficulty] = { ms, hints: G.hints, undos: G.undos };
     } else if (src.type === "mode") key = `${src.mode}-${src.diff}`;
+    else if (src.type === "weekly") {
+      const wk = store.get("zip-weekly", {}) || {};
+      if (!wk[src.week]) { wk[src.week] = { ms, hints: G.hints }; store.set("zip-weekly", wk); }
+    }
     if (key) {
       r.solved[key] = (r.solved[key] || 0) + 1;
       if (!G.hints) {
@@ -447,23 +534,74 @@ async function getHint() {
   G.busy = true; updateHud();
   const tok = G.animTok, rev = game.rev;
   try {
+    if (G.P.coop) return await coopHint(tok, rev);
+    // the Detective explains the move when it can (a short sentence); the plain hint stays the authority
+    const ex = api("/api/hint/explain", { puzzle: G.data, path: game.path, id: G.id, time_limit: 2 }).catch(() => null);
     const r = await api("/api/hint", { puzzle: G.data, path: game.path, id: G.id });
+    const e = r.status === "next" && !r.reason ? await Promise.race([ex, sleep(2500).then(() => null)]) : null;
+    if (e && e.reason && e.move === r.next) r.reason = e.reason;
     if (tok !== G.animTok || rev !== game.rev) return;
     if (r.status === "next") {
       G.hints++; G.hint = { node: r.next }; sound.hint();
-      coach("Try the glowing square ✨", 2600);
+      // the Detective's reason, when the server has one ("This corner only has one way out")
+      coach(r.reason ? `💡 ${esc(shortReason(r.reason))}` : "Try the glowing square ✨", r.reason ? 4200 : 2600);
     } else if (r.status === "backtrack") {
       G.hints++;
       G.animating = true;
       while (game.path.length > Math.max(1, r.keep)) { game.truncate(game.path.length - 1); sound.undo(); await sleep(45); if (tok !== G.animTok) return; }
       G.animating = false;
       G.hint = { node: r.next }; sound.hint();
-      coach("Dead end! I rewound you a bit. Try the glow ✨", 3200, "warn");
+      coach(r.reason ? `↩ ${esc(r.reason)}` : "Dead end! I rewound you a bit. Try the glow ✨", 3400, "warn");
     } else if (r.status === "done") coach("Already solved! 🎉", 2000);
     else coach("Hmm, no hint right now. Try Undo 🙂", 2500);
     render(false);
   } catch { coach("Couldn't get a hint 😕", 2200); }
   finally { G.busy = false; G.animating = false; updateHud(); }
+}
+// the Detective can be wordy: keep its first clue + its conclusion, so the hint stays a one-liner
+function shortReason(t) {
+  t = String(t).trim();
+  if (t.length <= 90) return t;
+  const sents = t.split(/(?<=\.)\s+/), first = sents[0].split(/;\s*/)[0].replace(/[.;,]+$/, ""), last = sents.length > 1 ? sents[sents.length - 1] : "";
+  const both = last ? `${first}… ${last}` : `${first}.`;
+  return both.length <= 110 ? both : `${first}.`;
+}
+// co-op hints: the server's answer when it knows co-op ({next, which} / {keep: [k1, k2]}), else the puzzle's own solution
+function coopSolution(r = null) {
+  const s = (r && r.paths) || (G.data.meta && G.data.meta.coop && G.data.meta.coop.solution && G.data.meta.coop.solution.paths) || null;
+  return s && s.length === 2 ? s : null;
+}
+async function coopHint(tok, rev) {
+  let r = null;
+  try { r = await api("/api/hint", { puzzle: G.data, path: game.paths[0], paths: game.paths, path_index: game.active, id: G.id }); } catch { r = null; }
+  if (tok !== G.animTok || rev !== game.rev) return;
+  if (r && r.status === "done") { coach("Already solved! 🎉", 2000); return; }
+  if (r && r.which === undefined && r.path_index != null) r.which = r.path_index;
+  if (!(r && (r.status === "next" && r.which != null || r.status === "backtrack" && Array.isArray(r.keep)))) {
+    const sol = coopSolution();
+    if (!sol) { coach("Hmm, no hint right now. Try Undo 🙂", 2500); return; }
+    const lcp = (a, b) => { let k = 0; while (k < a.length && k < b.length && a[k] === b[k]) k++; return k; };
+    const k = game.paths.map((p, i) => lcp(p, sol[i]));
+    const ok = game.paths.map((p, i) => k[i] === p.length);
+    if (ok[0] && ok[1]) {
+      const i = game.paths[game.active].length < sol[game.active].length ? game.active : 1 - game.active;
+      r = { status: "next", which: i, next: sol[i][game.paths[i].length] };
+    } else r = { status: "backtrack", keep: k.map((x) => Math.max(1, x)), which: ok[game.active] ? 1 - game.active : game.active };
+  }
+  if (r.status === "backtrack") {
+    G.hints++; G.animating = true;
+    for (const i of [0, 1]) while (game.paths[i].length > Math.max(1, r.keep[i])) { game.truncate(game.paths[i].length - 1, i); sound.undo(); await sleep(45); if (tok !== G.animTok) return; }
+    G.animating = false;
+    const i = r.which ?? 0, sol = coopSolution();
+    game.setActive(i);
+    const nx = r.next ?? (sol ? sol[i][game.paths[i].length] : null);
+    if (nx != null) G.hint = { node: nx };
+    sound.hint(); coach("Dead end! I rewound a bit ✨", 3000, "warn");
+  } else {
+    G.hints++; game.setActive(r.which); G.hint = { node: r.next }; sound.hint();
+    coach(`${r.which ? "🔵" : "🟠"} Try the glowing square ✨`, 2600);
+  }
+  render(false);
 }
 function undo() { if (!G.animating && !G.won) game.undo(); }
 
@@ -485,6 +623,7 @@ async function showMe() {
   document.body.classList.add("robot-on");
   coach(`<span class="bot-ic">🤖</span> Let me show you…`);
   updateHud();
+  if (G.P.coop) return showMeCoop(tok);
   const full = await solveFull();
   if (tok !== G.animTok) return;
   if (!full) {
@@ -510,6 +649,52 @@ async function showMe() {
   document.body.classList.remove("robot-on");
 }
 
+async function showMeCoop(tok) {
+  let sol = null;
+  try { const r = await api("/api/solve/exact", { puzzle: G.data, time_limit: 20 }); sol = coopSolution(r); } catch { /* fall back */ }
+  sol = sol || coopSolution();
+  if (tok !== G.animTok) return;
+  if (!sol) { G.animating = false; game.locked = false; document.body.classList.remove("robot-on"); coach("Even the robot is stumped 🤔", 2600); updateHud(); return; }
+  G.assisted = true; sound.robot();
+  const lcp = (a, b) => { let k = 0; while (k < a.length && k < b.length && a[k] === b[k]) k++; return k; };
+  for (const i of [0, 1]) { const k = lcp(game.paths[i], sol[i]); while (game.paths[i].length > Math.max(1, k)) { game.truncate(game.paths[i].length - 1, i); await sleep(25); if (tok !== G.animTok) return; } }
+  coach(`<span class="bot-ic">🤖</span> Beep boop… both pens!`);
+  const rest = sol[0].length + sol[1].length - game.total, dt = clamp(2600 / Math.max(1, rest), 35, 150);
+  while (game.total < sol[0].length + sol[1].length) {
+    if (tok !== G.animTok) return;
+    for (const i of [0, 1]) {
+      const p = game.paths[i];
+      if (p.length >= sol[i].length) continue;
+      if (game.total === sol[0].length + sol[1].length - 1) { G.animating = false; coach(""); document.body.classList.remove("robot-on"); }
+      game.setActive(i);
+      if (!game.push(sol[i][p.length], { which: i })) { game.locked = false; G.animating = false; document.body.classList.remove("robot-on"); return; }
+      await sleep(dt);
+    }
+  }
+  G.animating = false;
+  document.body.classList.remove("robot-on");
+}
+
+// ------------------------------------------------------------------ engine per puzzle type
+// flat boards (Board) or the rotatable cube (CubeBoard); one line (PathGame) or two (CoopGame)
+const deep = () => !!(G.P && G.P.dim >= 3 && !G.P.cube);
+function ensureEngine(P) {
+  const wantB = P.cube ? CubeBoard : Board, wantG = P.coop ? CoopGame : PathGame;
+  if (!(board instanceof wantB)) {
+    board = new wantB($("boardHost"), { interactive: true, maxCell: 84, label: P.cube ? "Cube board: drag on the faces to draw, drag outside it to spin" : "Zip board: drag from 1 through every square. Arrow keys work too.",
+      onDown: (v) => game.onDown(v), onDrag: (v) => game.onDrag(v) });
+    $("boardHost").innerHTML = "";
+  }
+  if (!(game instanceof wantG) || game.board !== board) game = new wantG(board, { onChange, onBad, onFull, onPen: () => { paintPens(); render(false); } });
+  board.setPuzzle(P);
+}
+function paintPens() {
+  const on = !!(G.P && G.P.coop);
+  $("penSeg").hidden = !on;
+  if (!on) return;
+  document.querySelectorAll("#penSeg button").forEach((b) => { const k = Number(b.dataset.pen) === game.active; b.classList.toggle("on", k); b.setAttribute("aria-pressed", String(k)); });
+}
+
 // ------------------------------------------------------------------ 3D / 4D views
 function viewTheme() { return { bg: cssVar("--panel-2"), cell: cssVar("--cell-edge"), edge: cssVar("--border"), legal: cssVar("--legal"), good: cssVar("--good"), bad: cssVar("--bad"), plate: cssVar("--cell"), heat: cssVar("--heat"), accent: cssVar("--accent") }; }
 function disposeView() {
@@ -522,7 +707,7 @@ function disposeView() {
 async function setupView() {
   disposeView();
   const gen = viewGen;
-  if (!G.P || G.P.dim < 3) return;
+  if (!G.P || !deep()) return;
   G.has3d = true;
   layout();
   try {
@@ -644,6 +829,7 @@ async function startRace(botId, push = false) {
   if (bot.mode === "search" && res.trace) {
     let stack = [];
     for (const ev of res.trace) {
+      if (ev && typeof ev === "object") { if (ev.t === "path" && Array.isArray(ev.p)) { stack = ev.p.slice(); events.push({ path: stack.slice(), dt: bot.pace }); } continue; }
       if (ev === "R") { stack = []; continue; }
       if (ev >= 0) { stack.push(ev); if (stack.length > 1) events.push({ path: stack.slice(), dt: bot.pace }); }
       else { const popped = stack.splice(stack.length + ev); events.push({ path: stack.slice(), dt: bot.pace * 0.6, popped }); }
@@ -880,6 +1066,11 @@ async function route(hash, push = false) {
   const q = new URLSearchParams((hash || "").replace(/^#/, ""));
   const seed = q.get("seed") && /^\d+$/.test(q.get("seed")) ? Number(q.get("seed")) : null;
   if (q.get("custom")) return playCustom(q.get("custom"), q.get("ai") === "1", push);
+  if (q.has("arch")) {   // a puzzle the Architect designed in the AI show ("Play it")
+    const a = store.get("zip-arch", null);
+    if (a && a.puzzle) return fetchAndLoad(async () => ({ id: a.id || null, seed: null, puzzle: a.puzzle, rating: a.rating || null }), { type: "arch" }, "#arch", push);
+  }
+  if (q.get("weekly")) return playWeekly(q.get("weekly"), push);
   if (q.get("daily")) return playDaily(q.get("daily"), q.get("date") || today(), push);
   if (q.get("play") && MODES[q.get("play")]) return playMode(q.get("play"), q.get("diff"), seed, push);
   if (q.get("d") && PRESETS[q.get("d")]) {
@@ -913,8 +1104,11 @@ function init() {
   document.querySelector("#hintBtn .cb-ic").innerHTML = icon("bulb");
   document.querySelector("#restartBtn .cb-ic").innerHTML = icon("reset");
   paintSound();
+  buildMore();
   buildArt();
   renderHome();
+  checkMore();
+  checkWeekly();
 
   $("backBtn").onclick = back;
   $("soundBtn").onclick = toggleSound;
@@ -937,6 +1131,7 @@ function init() {
   });
 
   $("heroPlay").onclick = () => playDaily("medium", today(), true);
+  $("weekly").onclick = () => playWeekly(isoWeek(), true);
   $("hero").addEventListener("click", (e) => { if (!e.target.closest("button")) playDaily("medium", today(), true); });
   document.querySelectorAll("[data-play]").forEach((b) => {
     b.addEventListener("click", (e) => {
@@ -952,6 +1147,7 @@ function init() {
   $("restartBtn").onclick = restart;
   $("showMeBtn").onclick = showMe;
   document.querySelectorAll("#viewSeg button").forEach((b) => { b.onclick = () => { G.view = b.dataset.v; paintViewSeg(); layout(); }; });
+  document.querySelectorAll("#penSeg button").forEach((b) => { b.onclick = () => { if (G.P && G.P.coop) { game.setActive(Number(b.dataset.pen)); sound.note(0, { seed: 1 }); } }; });
 
   $("shShare").onclick = async () => {
     if (!sheetShare) return;

@@ -10,7 +10,13 @@ Model of the player
 -------------------
 The player extends the line from its head (as in the game).  At each step the
 rule-legal moves are the unvisited neighbours of the head that are not a later
-checkpoint (and the last checkpoint only as the very last cell).  Every
+checkpoint (and the last checkpoint only as the very last cell), not against a
+one-way arrow and not a door whose key is still missing.  All techniques are
+sound on every board: the region / parity / articulation rules reason on the
+undirected graph (a relaxation), parity switches itself off on non-bipartite
+boards (hex, torus with odd sides, cube surface, portals), and L1 also knows
+the arrow rule "a cell with no usable way in / out" and "a cell only enterable
+from the head must be next".  Every
 *wrong* legal move must be ruled out; the move's cost is the cheapest of the
 following techniques, tried in order of how obvious they are to a person:
 
@@ -146,6 +152,8 @@ class _Human:
                 continue
             if w == s.end and s.remaining > 1:
                 continue
+            if s.constrained and not s.ok_step(h, w):   # one-way arrows, keys before doors
+                continue
             out.append(w)
         return out
 
@@ -180,9 +188,23 @@ class _Human:
                 forced = x
         if not any_free:
             return True
+        if s.blocked is not None:   # arrows: a neighbour only enterable from the head, or with no way in/out
+            for grp in (hn, nbrs[p]):
+                for x in grp:
+                    if vis[x]:
+                        continue
+                    st = s.dir_status(x, h)
+                    if st == -2:
+                        return True
+                    if st == 1:
+                        if forced >= 0 and forced != x:
+                            return True
+                        forced = x
         if forced >= 0:
             c = s.cpi[forced]
             if c >= 0 and c != s.nxt:
+                return True
+            if s.constrained and not s.ok_step(h, forced):
                 return True
         for x in nbrs[p]:
             if vis[x] or x in hn:

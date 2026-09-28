@@ -261,10 +261,18 @@ def stage_select(cands: list[dict], pool_size: int) -> dict:
 
 def write_bank(sel: dict) -> list[dict]:
     import shutil
-    for sub in ("pools", "daily"):
-        if (OUT / sub).exists():
-            shutil.rmtree(OUT / sub)
-        (OUT / sub).mkdir(parents=True)
+    # additive: pools / index keys of other builders (scripts/architect_designs.py, build_bank_modes.py) are kept
+    try:
+        old = json.loads((OUT / "index.json").read_text())
+    except (OSError, ValueError):
+        old = {}
+    if (OUT / "daily").exists():
+        shutil.rmtree(OUT / "daily")
+    (OUT / "daily").mkdir(parents=True)
+    (OUT / "pools").mkdir(parents=True, exist_ok=True)
+    for m in MODES:
+        for f in (OUT / "pools").glob(f"{m}-*.json"):
+            f.unlink()
     index = {"version": 1, "generated": dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat(),
              "daily_start": DAILY_START.isoformat(), "daily_end": DAILY_END.isoformat(),
              "daily_epoch": DAILY_START.isoformat(),
@@ -289,6 +297,12 @@ def write_bank(sel: dict) -> list[dict]:
         (OUT / "daily" / f"{m}.json").write_text(dumps(recs))
     index["daily_files"] = "daily/{yyyy}-{mm}.json"
     index["puzzles"] = len(allents)
+    for m, ds in (old.get("modes") or {}).items():
+        if m not in MODES:
+            index["modes"][m] = ds
+    for k, v in old.items():
+        if k not in index:
+            index[k] = v
     (OUT / "index.json").write_text(json.dumps(index, indent=1))
     print(f"[select] {len(allents)} bank puzzles; pools "
           + ", ".join(f"{m}-{d}:{len(v)}" for (m, d), v in sel["pools"].items()), flush=True)
@@ -350,6 +364,12 @@ def stage_robots(ents: list[dict], workers: int, force: bool = False) -> None:
     rdir = OUT / "robots"
     rdir.mkdir(parents=True, exist_ok=True)
     keep = {e["id"] for e in ents}
+    for f in [*(OUT / "pools").glob("*.json"), *(OUT / "architect").glob("*.json")]:   # other builders' puzzles
+        try:
+            data = json.loads(f.read_text())
+        except (OSError, ValueError):
+            continue
+        keep |= {e["id"] for e in (data if isinstance(data, list) else data.values()) if isinstance(e, dict) and "id" in e}
     for f in rdir.glob("*.json"):          # drop runs of puzzles no longer in the bank
         if f.stem not in keep:
             f.unlink()

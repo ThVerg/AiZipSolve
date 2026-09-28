@@ -29,7 +29,8 @@ from typing import Sequence
 
 import numpy as np
 
-from .graph import ZipGraph, grid, islands, random_mask, remove_edges
+from .graph import (ZipGraph, cube_surface, from_edges, grid, hex_parallelogram, hexagon, islands,
+                    overpass_grid, random_mask, remove_edges, torus, tri_hexagon, tri_rect)
 from .puzzle import Puzzle
 
 __all__ = ["random_hamiltonian_path", "place_checkpoints", "generate", "make_puzzle",
@@ -47,7 +48,8 @@ def _left(deadline: float, what: str = "puzzle generation") -> float:
     return left
 
 
-KINDS = ("grid2d", "walls", "islands", "islands_chain", "grid3d", "grid4d", "mask", "grid")
+KINDS = ("grid2d", "walls", "islands", "islands_chain", "grid3d", "grid4d", "mask", "grid",
+         "portals", "torus", "hex", "tri", "oneway", "overpass", "keys", "cubesurf")
 
 
 # ----------------------------------------------------------------------------
@@ -424,13 +426,17 @@ def default_num_checkpoints(num_nodes: int, rng=None) -> int:
     return int(min(max(2, k), num_nodes))
 
 
-def place_checkpoints(path: list[int], num_checkpoints: int, rng=None) -> list[int]:
+def place_checkpoints(path: list[int], num_checkpoints: int, rng=None, avoid=None) -> list[int]:
     """Pick `num_checkpoints` nodes of `path` in path order, always including both ends.
 
     Interior checkpoints are stratified (one random position per equal slice of
-    the path) so they do not clump together.
+    the path) so they do not clump together. `avoid`: nodes that must not become
+    interior checkpoints (keys, doors, overpass halves); fewer checkpoints are
+    returned if not enough other nodes exist.
     """
     rng = _np_rng(rng)
+    if avoid:
+        return _place_avoiding(path, num_checkpoints, rng, set(avoid))
     n = len(path)
     k = int(min(max(2, num_checkpoints), n))
     inner = k - 2
@@ -454,6 +460,17 @@ def place_checkpoints(path: list[int], num_checkpoints: int, rng=None) -> list[i
     return [path[0]] + [path[i] for i in idx] + [path[-1]]
 
 
+def _place_avoiding(path, num_checkpoints, rng, avoid) -> list[int]:
+    n = len(path)
+    ok = [i for i in range(1, n - 1) if path[i] not in avoid]
+    inner = int(min(max(0, num_checkpoints - 2), len(ok)))
+    idx = []
+    if inner:
+        slices = np.array_split(np.array(ok), inner)
+        idx = [int(sl[int(rng.integers(len(sl)))]) for sl in slices]
+    return [path[0]] + [path[i] for i in idx] + [path[-1]]
+
+
 def generate(graph: ZipGraph, num_checkpoints: int, rng=None, unique: bool = False,
              time_limit: float = 10.0) -> Puzzle:
     """Random puzzle on `graph` with `num_checkpoints` checkpoints (Puzzle.solution set).
@@ -473,10 +490,18 @@ def generate(graph: ZipGraph, num_checkpoints: int, rng=None, unique: bool = Fal
                              time_limit - (time.perf_counter() - t0))
 
 
-def _puzzle_from_path(graph, path, num_checkpoints, rng, unique, time_limit) -> Puzzle:
+def _puzzle_from_path(graph, path, num_checkpoints, rng, unique, time_limit,
+                      reserved=(), decorate=None) -> Puzzle:
+    """Checkpoints along `path` (+ uniqueness loop). `reserved`: nodes never used as
+    checkpoints. `decorate(graph, path, cps) -> (graph, more_reserved)` runs after the
+    checkpoints are placed (keys/doors are chosen around them)."""
     t0 = time.perf_counter()
     deadline = t0 + time_limit
-    cps = place_checkpoints(path, num_checkpoints, rng)
+    reserved = set(reserved)
+    cps = place_checkpoints(path, num_checkpoints, rng, avoid=reserved)
+    if decorate is not None:
+        graph, more = decorate(graph, path, cps)
+        reserved |= set(more)
     puzzle = Puzzle(graph, cps, list(path))
     if unique:
         pos = {v: i for i, v in enumerate(path)}
@@ -490,7 +515,7 @@ def _puzzle_from_path(graph, path, num_checkpoints, rng, unique, time_limit) -> 
             if len(sols) <= 1 and status == "complete":
                 break
             cps = set(puzzle.checkpoints)
-            free = [i for i in range(1, len(path) - 1) if path[i] not in cps]
+            free = [i for i in range(1, len(path) - 1) if path[i] not in cps and path[i] not in reserved]
             if not free:
                 break
             others = [s for s in sols if s is not None and list(s) != list(path)]
@@ -827,8 +852,45 @@ def make_puzzle(kind: str, size, num_checkpoints: int | None = None, rng=None, *
       "grid3d"  size=int n -> n^3 ;  "grid4d" size=int n -> n^4
       "grid"    size=tuple of any dimensionality
       "mask"    irregular blob via graph.random_mask; size=int (n x n) or shape; kw fill (0.75)
-    Other kw: unique (False), time_limit (10.0), max_tries (100).
+      "portals" square grid + portal pairs (extra edges between far cells) the solution
+                really uses; size=int n or (h, w); kw portals (k, default ~h*w/20),
+                decoys (portals the solution does NOT use, default 1 if k >= 2),
+                min_dist (Manhattan distance between the two ends, default (h+w)//3),
+                walls_frac (0.0: walls on unused grid edges). meta.portals, portal_colors.
+      "torus"   h x w grid with wrap-around on all borders (h, w >= 3); size=int n or
+                (h, w); kw wraps (how many wrap edges the solution should use, default
+                max(2, (h+w)//3)). meta.torus, wrap_edges.
+      "hex"     hexagonal cells (axial coords, meta.layout="hex"); size=int s -> hexagon
+                with s cells per side (3s(s-1)+1 cells: 4 -> 37, 5 -> 61); size=(h, w) or
+                kw shape="rhombus" -> h x w parallelogram. Not bipartite.
+      "tri"     triangle cells (meta.layout="tri"); size=int s -> hexagon of 6s^2
+                triangles (3 -> 54, 4 -> 96); size=(rows, cols) or kw shape="rect"
+                (int s -> s x 2s). Bipartite (up/down), max degree 3.
+      "oneway"  square grid + one-way arrows ("arcs"): kw oneway_frac (0.25 of the
+                solution's edges get an arrow along the solution direction), decoys
+                (arrows on unused edges, random direction; default half as many),
+                walls_frac (0.0). meta.oneway = arcs.
+      "overpass" square grid, size int n or (h, w), with kw overpasses (default
+                ~h*w/12) interior cells split into an H and a V node (the path crosses
+                them twice); overpass nodes are never checkpoints. meta.overpass.
+      "keys"    square grid + key/door pairs ("precedence": key before door); kw keys
+                (default ~n/16), min_gap (path distance key -> door, default
+                max(3, n//8)), walls_frac (0.0). Doors are preferably closer to the
+                start than their keys (tempting to take them early); keys/doors are
+                never checkpoints. meta.keys.
+      "cubesurf" surface of an n x n x n cube (6n^2 cells, 3D coords scaled x2);
+                size=int n (3 -> 54, 4 -> 96).
+    Other kw: unique (False), time_limit (10.0), max_tries (100), fog (False: sets
+    meta.fog so the UI hides far-away numbers; works for every kind).
     """
+    fog = bool(kw.pop("fog", False))
+    p = _make_puzzle(kind, size, num_checkpoints, rng, **kw)
+    if fog:
+        p.graph.meta["fog"] = True
+    return p
+
+
+def _make_puzzle(kind: str, size, num_checkpoints: int | None = None, rng=None, **kw) -> Puzzle:
     rng = _np_rng(rng)
     unique = kw.pop("unique", False)
     time_limit = kw.pop("time_limit", 10.0)
@@ -838,12 +900,17 @@ def make_puzzle(kind: str, size, num_checkpoints: int | None = None, rng=None, *
     def left() -> float:
         return _left(deadline)
 
-    def finish(graph, path=None):
+    def finish(graph, path=None, reserved=(), decorate=None):
         k = num_checkpoints if num_checkpoints is not None else \
             default_num_checkpoints(graph.num_nodes, rng)
+        if num_checkpoints is None and kind in _CP_FACTOR:   # boards that need fewer clues
+            k = max(2, int(round(k * _CP_FACTOR[kind])))
         if path is None:
             return generate(graph, k, rng, unique=unique, time_limit=left())
-        return _puzzle_from_path(graph, path, k, rng, unique, left())
+        return _puzzle_from_path(graph, path, k, rng, unique, left(), reserved, decorate)
+
+    if kind in _NEW_KINDS:
+        return _NEW_KINDS[kind](size, rng, kw, left, finish, time_limit, max_tries)
 
     if kind in ("grid2d", "grid3d", "grid4d", "grid"):
         dim = {"grid2d": 2, "grid3d": 3, "grid4d": 4, "grid": None}[kind]
@@ -906,3 +973,364 @@ def make_puzzle(kind: str, size, num_checkpoints: int | None = None, rng=None, *
         raise ValueError(f"no Hamiltonian mask found in {max_tries} tries")
 
     raise ValueError(f"unknown kind {kind!r}; expected one of {KINDS}")
+
+
+# ----------------------------------------------------------------------------
+# new kinds: portals, torus, hex, tri, oneway, overpass, keys, cubesurf
+# ----------------------------------------------------------------------------
+def _steer_edges(path, nbrs, special: set, target: int, prng: random.Random, steps: int,
+                 deadline: float):
+    """Backbite MCMC steering how many path edges lie in `special` (a set of
+    frozensets) towards `target`. Returns (best path, |count - target|)."""
+    path = list(path)
+    cnt = sum(1 for e in zip(path, path[1:]) if frozenset(e) in special)
+    E = abs(cnt - target)
+    best, bestE = list(path), E
+    n = len(path)
+    if n < 3:
+        return best, bestE
+    for step in range(steps):
+        if (step & 511) == 0 and time.perf_counter() > deadline:
+            break
+        flip = prng.random() < 0.5
+        if flip:
+            path.reverse()
+        t = path[-1]
+        ns = nbrs[t]
+        x = ns[prng.randrange(len(ns))]
+        if x != path[-2]:
+            i = path.index(x)
+            d = (frozenset((t, x)) in special) - (frozenset((x, path[i + 1])) in special)
+            newE = abs(cnt + d - target)
+            if newE <= E or (E > 0 and prng.random() < math.exp(-1.5 * (newE - E))) or \
+                    (E == 0 and newE == 0):
+                path[i + 1:] = path[:i:-1]
+                cnt += d
+                E = newE
+        if flip:
+            path.reverse()
+        if E <= bestE:
+            best, bestE = list(path), E
+    return best, bestE
+
+
+def _regraph(g: ZipGraph, kind: str, **meta) -> ZipGraph:
+    m = {k: v for k, v in g.meta.items() if not k.startswith("_")}
+    m.update(meta)
+    return ZipGraph(g.coords, g.neighbors, kind, m)
+
+
+def _hpath(g, rng, left, what="board"):
+    path = random_hamiltonian_path(g, rng, time_limit=left())
+    if path is None:
+        left()
+        raise ValueError(f"no Hamiltonian path on this {what}")
+    return path
+
+
+def _add_walls(g: ZipGraph, path, frac: float, rng, keep=()) -> ZipGraph:
+    """Walls on a fraction of the edges the solution does not use (never on `keep`)."""
+    if frac <= 0:
+        return g
+    used = {frozenset(e) for e in zip(path, path[1:])} | {frozenset(e) for e in keep}
+    free = [e for e in g.edges() if frozenset(e) not in used]
+    m = int(round(frac * len(free)))
+    if not m:
+        return g
+    chosen = rng.choice(len(free), size=m, replace=False)
+    return remove_edges(g, [free[i] for i in sorted(chosen)])
+
+
+def _mk_portals(size, rng, kw, left, finish, time_limit, max_tries):
+    h, w = _as_shape(size, 2)
+    n = h * w
+    k = min(max(1, int(kw.pop("portals", max(1, round(n / 20))))), max(1, n // 6))
+    decoys = int(kw.pop("decoys", 1 if k >= 2 else 0))
+    decoys = min(max(0, decoys), max(0, k - 1))
+    min_dist = int(kw.pop("min_dist", max(2, (h + w) // 3)))
+    frac = float(kw.pop("walls_frac", 0.0))
+    prng = _py_rng(rng)
+    base = grid(h, w)
+    cells = base.coords.astype(int)
+    target = k - decoys
+    best = None
+    for _ in range(max_tries):
+        left()
+        order = rng.permutation(n).tolist()
+        pairs, used = [], set()
+        for a in order:
+            if len(pairs) == k:
+                break
+            if a in used:
+                continue
+            ra, ca = cells[a]
+            cands = [b for b in order if b not in used and b != a
+                     and abs(cells[b][0] - ra) + abs(cells[b][1] - ca) >= min_dist]
+            # keep portal ends apart from other portal ends (readability)
+            cands = [b for b in cands if all(abs(cells[b][0] - cells[x][0]) + abs(cells[b][1] - cells[x][1]) > 1
+                                             for x in used | {a})]
+            if not cands:
+                continue
+            b = cands[0]
+            pairs.append((int(a), int(b)))
+            used.update((a, b))
+        if len(pairs) < k:
+            continue
+        g = from_edges(base.coords, base.edges() + pairs, "portals",
+                       {"portals": [list(p) for p in pairs], "portal_colors": list(range(k))})
+        path = random_hamiltonian_path(g, rng, time_limit=min(left(), max(0.3, time_limit / 5)))
+        if path is None:
+            continue
+        special = {frozenset(p) for p in pairs}
+        path, E = _steer_edges(path, g.neighbors, special, target, prng, 300 * n,
+                               min(time.perf_counter() + max(0.3, time_limit / 5),
+                                   time.perf_counter() + left()))
+        nused = sum(1 for e in zip(path, path[1:]) if frozenset(e) in special)
+        if E == 0:
+            best = (g, path)
+            break
+        if nused >= 1 and best is None:
+            best = (g, path)
+    if best is None:
+        raise ValueError("could not build a portal board")
+    g, path = best
+    g = _add_walls(g, path, frac, rng, keep=[tuple(p) for p in g.meta["portals"]])
+    return finish(g, path)
+
+
+def _mk_torus(size, rng, kw, left, finish, time_limit, max_tries):
+    h, w = _as_shape(size, 2)
+    g = torus(h, w)
+    target = min(max(0, int(kw.pop("wraps", max(2, (h + w) // 3)))), h + w)
+    path = _hpath(g, rng, left, "torus")
+    special = {frozenset(e) for e in g.meta["wrap_edges"]}
+    path, _ = _steer_edges(path, g.neighbors, special, target, _py_rng(rng), 200 * g.num_nodes,
+                           time.perf_counter() + min(left(), max(0.3, time_limit / 5)))
+    return finish(g, path)
+
+
+def _mk_hex(size, rng, kw, left, finish, time_limit, max_tries):
+    shape = kw.pop("shape", None)
+    if isinstance(size, (int, np.integer)) and shape != "rhombus":
+        g = hexagon(int(size))
+    else:
+        h, w = _as_shape(size, 2)
+        g = hex_parallelogram(h, w)
+    g = _regraph(g, "hex")
+    return finish(g, _hpath(g, rng, left, "hex board"))
+
+
+def _mk_tri(size, rng, kw, left, finish, time_limit, max_tries):
+    shape = kw.pop("shape", None)
+    if isinstance(size, (int, np.integer)) and shape != "rect":
+        g = tri_hexagon(int(size))
+    else:
+        rows, cols = (int(size), 2 * int(size)) if isinstance(size, (int, np.integer)) else _as_shape(size, 2)
+        g = tri_rect(rows, cols)
+    return finish(g, _hpath(g, rng, left, "triangle board"))
+
+
+def _mk_cubesurf(size, rng, kw, left, finish, time_limit, max_tries):
+    n = int(size if isinstance(size, (int, np.integer)) else size[0])
+    g = cube_surface(n)
+    return finish(g, _hpath(g, rng, left, "cube surface"))
+
+
+def _mk_oneway(size, rng, kw, left, finish, time_limit, max_tries):
+    h, w = _as_shape(size, 2)
+    frac = min(max(float(kw.pop("oneway_frac", 0.25)), 0.0), 1.0)
+    walls = float(kw.pop("walls_frac", 0.0))
+    g = grid(h, w)
+    path = _hpath(g, rng, left, "grid")
+    g = _add_walls(g, path, walls, rng)
+    pe = list(zip(path, path[1:]))
+    m = int(round(frac * len(pe)))
+    idx = sorted(rng.choice(len(pe), size=min(m, len(pe)), replace=False).tolist()) if m else []
+    arcs = [(int(pe[i][0]), int(pe[i][1])) for i in idx]
+    decoys = int(kw.pop("decoys", max(1, m // 2) if m else 0))
+    used = {frozenset(e) for e in pe}
+    free = [e for e in g.edges() if frozenset(e) not in used]
+    for i in (rng.choice(len(free), size=min(decoys, len(free)), replace=False).tolist() if decoys and free else []):
+        u, v = free[i]
+        arcs.append((int(u), int(v)) if rng.random() < 0.5 else (int(v), int(u)))
+    arcs = [list(a) for a in arcs]
+    g = _regraph(g, "oneway", arcs=arcs, oneway=arcs)
+    return finish(g, path)
+
+
+def _mk_overpass(size, rng, kw, left, finish, time_limit, max_tries):
+    """Path first: start from a random Hamiltonian path of the plain grid and grow
+    overpasses with backbite moves. Whenever a path end t sits right above/below
+    (left/right of) a cell X that the path crosses straight in the other direction,
+    X is split: its current visit becomes the H (or V) node, the new V (H) node is
+    appended after t and one backbite move through the opposite neighbour makes it
+    interior. The path stays Hamiltonian on the split graph at every step, so
+    every board is solvable by construction (no parity / search failures)."""
+    h, w = _as_shape(size, 2)
+    if h < 3 or w < 3:
+        raise ValueError("overpass boards need h, w >= 3")
+    k = int(kw.pop("overpasses", max(1, round(h * w / 12))))
+    k = max(1, min(k, ((h - 2) * (w - 2) + 1) // 2))
+    prng = _py_rng(rng)
+    base = grid(h, w)
+    cell = [tuple(map(int, c)) for c in base.coords.astype(int)]
+    ov: set = set()
+
+    def nbrs(node):
+        t, r, c = node
+        dirs = []
+        if t in ("c", "h"):
+            dirs += [(0, 1), (0, -1)]
+        if t in ("c", "v"):
+            dirs += [(1, 0), (-1, 0)]
+        out = []
+        for dr, dc in dirs:
+            rr, cc = r + dr, c + dc
+            if 0 <= rr < h and 0 <= cc < w:
+                if (rr, cc) in ov:
+                    out.append(("h" if dr == 0 else "v", rr, cc))
+                else:
+                    out.append(("c", rr, cc))
+        return out
+
+    def backbite(path):
+        flip = prng.random() < 0.5
+        if flip:
+            path.reverse()
+        t = path[-1]
+        ns = nbrs(t)
+        x = ns[prng.randrange(len(ns))]
+        if x != path[-2]:
+            i = path.index(x)
+            path[i + 1:] = path[:i:-1]
+        if flip:
+            path.reverse()
+
+    def try_split(path) -> bool:
+        """If an end of the path allows it, create one overpass. True on success."""
+        for flip in (False, True):
+            if flip:
+                path.reverse()
+            t = path[-1]
+            if t[0] == "c":
+                _, r, c = t
+                for dr, dc in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                    X = (r + dr, c + dc)
+                    if not (1 <= X[0] <= h - 2 and 1 <= X[1] <= w - 2) or X in ov:
+                        continue
+                    if any(abs(X[0] - a) + abs(X[1] - b) <= 1 for a, b in ov):
+                        continue
+                    node = ("c",) + X
+                    i = path.index(node)
+                    if i == 0 or i == len(path) - 1:
+                        continue
+                    a, b = path[i - 1], path[i + 1]
+                    vertical_move = dc == 0       # t is above/below X
+                    # X must currently be crossed straight in the other direction
+                    if vertical_move:
+                        straight = a[1] == X[0] and b[1] == X[0] and abs(a[2] - b[2]) == 2
+                    else:
+                        straight = a[2] == X[1] and b[2] == X[1] and abs(a[1] - b[1]) == 2
+                    if not straight:
+                        continue
+                    opp = ("c", X[0] + dr, X[1] + dc)
+                    ov.add(X)
+                    path[i] = ("h" if vertical_move else "v",) + X
+                    new = ("v" if vertical_move else "h",) + X
+                    path.append(new)
+                    j = path.index(opp)       # backbite: link new -> opp, reverse the tail
+                    path[j + 1:] = path[:j:-1]
+                    if flip:
+                        path.reverse()
+                    return True
+            if flip:
+                path.reverse()
+        return False
+
+    for _ in range(max_tries):
+        left()
+        ov.clear()
+        p0 = random_hamiltonian_path(base, rng, time_limit=left())
+        if p0 is None:
+            continue
+        path = [("c",) + cell[v] for v in p0]
+        steps = 0
+        budget = 400 * h * w
+        deadline = time.perf_counter() + min(left(), max(0.5, time_limit / 4))
+        while len(ov) < k and steps < budget:
+            steps += 1
+            if (steps & 255) == 0 and time.perf_counter() > deadline:
+                break
+            if not try_split(path):
+                backbite(path)
+        # mix a little more and make sure neither end is an overpass half
+        for _ in range(20 * h * w):
+            backbite(path)
+        tries = 0
+        while (path[0][0] != "c" or path[-1][0] != "c") and tries < 10000:
+            backbite(path)
+            tries += 1
+        if not ov or path[0][0] != "c" or path[-1][0] != "c":
+            continue
+        g = overpass_grid(h, w, sorted(ov))
+        ids = {}
+        for o in g.meta["overpass"]:
+            ids[("h",) + tuple(o["cell"])] = o["h"]
+            ids[("v",) + tuple(o["cell"])] = o["v"]
+        for v, (r, c) in enumerate(g.coords.astype(int).tolist()):
+            ids.setdefault(("c", r, c), v)
+        node_path = [ids[x] for x in path]
+        ov_nodes = {x for o in g.meta["overpass"] for x in (o["h"], o["v"])}
+        return finish(g, node_path, reserved=ov_nodes)
+    raise ValueError("could not build an overpass board")
+
+
+def _mk_keys(size, rng, kw, left, finish, time_limit, max_tries):
+    h, w = _as_shape(size, 2)
+    n = h * w
+    nk = min(max(1, int(kw.pop("keys", max(1, round(n / 16))))), max(1, n // 6))
+    min_gap = min(max(2, int(kw.pop("min_gap", max(3, n // 8)))), max(2, n // 3))
+    walls = float(kw.pop("walls_frac", 0.0))
+    g = grid(h, w)
+    path = _hpath(g, rng, left, "grid")
+    g = _add_walls(g, path, walls, rng)
+    from .solver import _bfs_dist
+    dist = _bfs_dist(g, path[0])
+
+    def decorate(graph, path, cps):
+        cpset = set(cps)
+        pos = {v: i for i, v in enumerate(path)}
+        ok = [i for i in range(1, len(path) - 1) if path[i] not in cpset]
+        pairs, taken = [], set()
+        cands = []
+        for _ in range(60 * nk):
+            i, j = sorted(int(x) for x in rng.choice(ok, size=2, replace=False)) if len(ok) >= 2 else (0, 0)
+            if j - i < min_gap:
+                continue
+            a, b = path[i], path[j]
+            # tempting: the door is nearer the start than its key
+            score = (dist[a] - dist[b]) + 0.5 * rng.random()
+            cands.append((score, a, b))
+        cands.sort(reverse=True)
+        for _, a, b in cands:
+            if len(pairs) >= nk:
+                break
+            if a in taken or b in taken:
+                continue
+            pairs.append((int(a), int(b)))
+            taken.update((a, b))
+        pairs.sort(key=lambda p: pos[p[0]])
+        keys = [{"key": a, "door": b, "color": i} for i, (a, b) in enumerate(pairs)]
+        g2 = _regraph(graph, "keys", precedence=[list(p) for p in pairs], keys=keys)
+        return g2, taken
+
+    return finish(_regraph(g, "keys"), path, decorate=decorate)
+
+
+# default checkpoint count factor: triangle boards (degree <= 3) and boards with arrows /
+# keys carry extra information, so start with fewer numbers (unique mode adds as needed)
+_CP_FACTOR = {"tri": 0.5, "oneway": 0.8, "keys": 0.8}
+
+_NEW_KINDS = {"portals": _mk_portals, "torus": _mk_torus, "hex": _mk_hex, "tri": _mk_tri,
+              "oneway": _mk_oneway, "overpass": _mk_overpass, "keys": _mk_keys,
+              "cubesurf": _mk_cubesurf}

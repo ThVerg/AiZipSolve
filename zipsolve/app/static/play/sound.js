@@ -29,6 +29,7 @@ function tone(freq, { t = 0, dur = 0.09, type = "sine", gain = 0.6, attack = 0.0
   const t0 = c.currentTime + t;
   const o = c.createOscillator(), g = c.createGain();
   o.type = type;
+  freq = Math.max(30, Math.min(12000, freq));   // long lines climb the scale: keep it audible (and in range)
   o.frequency.setValueAtTime(freq, t0);
   if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(30, freq * slide), t0 + dur);
   g.gain.setValueAtTime(0.0001, t0);
