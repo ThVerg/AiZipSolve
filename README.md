@@ -22,7 +22,8 @@ python -m zipsolve.app      # opens http://127.0.0.1:8000
 - **Race the robot** — Rookie 🐣, Scout 🦊 or Grandmaster 🦉 play the same puzzle beside you.
 - **Show me 🤖** — the solver finishes the puzzle from wherever you are.
 - ☰ menu: **Puzzle editor** (draw your own maps, check solvable / unique, save and play),
-  **AI Lab** (`/lab`: AI vision heatmap, watch the search think, compare models) and a
+  **AI show** (`/lab`: watch a robot look at the board, hit dead ends and back up; robot vs robot
+  face-offs; power-user controls live in the workbench at `/workbench`) and a
   **Training dashboard** (`/dashboard`).
 
 <p align="center">

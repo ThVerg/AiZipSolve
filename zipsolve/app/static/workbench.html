@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Zip · AI workbench</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g'%3E%3Cstop offset='0' stop-color='%23ff9f1c'/%3E%3Cstop offset='.5' stop-color='%23d63a8f'/%3E%3Cstop offset='1' stop-color='%232f6fe0'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='8' fill='url(%23g)'/%3E%3Cpath d='M9 10h14L9 22h14' stroke='white' stroke-width='3.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <script src="/static/theme.js"></script>
+  <link rel="stylesheet" href="/static/style.css">
+  <script type="importmap">
+  { "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  } }
+  </script>
+</head>
+<body class="page-play page-lab">
+<a class="skip-link" href="#board">Skip to the board</a>
+<header class="topbar">
+  <a class="brand" href="/" aria-label="Zip home">
+    <span class="logo" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M9 10h14L9 22h14" stroke="white" stroke-width="3.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+    <span class="brand-name">Zip</span>
+  </a>
+  <nav class="nav" aria-label="Pages">
+    <a href="/" class="nav-link">Play</a>
+    <a href="/lab" class="nav-link">AI show</a>
+    <a href="/workbench" class="nav-link active" aria-current="page">Workbench</a>
+    <a href="/editor" class="nav-link">Editor</a>
+    <a href="/dashboard" class="nav-link">Dashboard</a>
+  </nav>
+  <div class="spacer"></div>
+  <div class="top-actions">
+    <button class="icon-btn" id="soundBtn" type="button" aria-label="Mute sounds" title="Sound (M)"></button>
+    <button class="icon-btn" id="keysBtn" type="button" aria-label="Keyboard shortcuts" title="Shortcuts (?)"></button>
+    <button class="icon-btn" id="helpBtn" type="button" aria-label="How to play" title="How to play"></button>
+    <button class="icon-btn" data-theme-toggle type="button" aria-label="Toggle theme"></button>
+  </div>
+</header>
+
+<main class="play">
+  <section class="stage" aria-label="Game">
+    <div class="modebar" role="toolbar" aria-label="Puzzle type">
+      <button class="chip daily-chip" id="dailyChip" type="button" data-diff="daily"></button>
+      <div class="chips" id="diffChips"></div>
+    </div>
+
+    <section class="card board-card" id="boardCard">
+      <div class="board-head">
+        <div class="title-block">
+          <div class="kicker" id="boardKicker">&nbsp;</div>
+          <h1 id="boardTitle">Loading…</h1>
+          <div class="sub" id="boardSub"></div>
+        </div>
+        <div class="hud" aria-live="off">
+          <div class="hud-item"><span class="k">Time</span><span class="v mono" id="stTime">0:00</span></div>
+          <div class="hud-item"><span class="k">Moves</span><span class="v mono" id="stMoves">0</span></div>
+          <div class="hud-item" id="hudHints"><span class="k">Hints</span><span class="v mono" id="stHints">0</span></div>
+        </div>
+      </div>
+      <div class="progress" aria-hidden="true"><i id="progress"></i></div>
+      <div class="view-toggle" id="viewToggle" hidden>
+        <div class="seg small" role="group" aria-label="4D view">
+          <button type="button" data-v="panels" class="on">Panels</button>
+          <button type="button" data-v="4d">4D view</button>
+        </div>
+      </div>
+      <div class="banner" id="banner" role="status" aria-live="polite"><div class="msg" id="bannerMsg"></div><div class="actions" id="bannerActions"></div></div>
+      <div class="trace-hud" id="traceHud" hidden></div>
+      <div class="arena" id="arena">
+        <div class="views" id="views">
+          <div class="view3d" id="view3d" hidden aria-label="3D / 4D view: drag to rotate, click a node to move"><span class="overlay-label" id="view3dLabel" hidden></span></div>
+          <div class="board" id="board"></div>
+        </div>
+        <aside class="race-side" id="raceSide" hidden aria-label="AI opponent">
+          <div class="race-head"><span class="race-name" id="raceName">AI</span><span class="race-status" id="raceStatus">ready</span></div>
+          <div class="race-board" id="raceBoard"></div>
+          <div class="progress thin"><i id="raceProgress"></i></div>
+          <div class="race-meta muted" id="raceMeta"></div>
+        </aside>
+      </div>
+      <div class="controls">
+        <button class="btn" id="undoBtn" type="button" title="Undo (Backspace)"></button>
+        <button class="btn" id="hintBtn" type="button" title="Hint (H)"></button>
+        <button class="btn" id="resetBtn" type="button" title="Reset (R)"></button>
+        <button class="btn toggle" id="visionBtn" type="button" aria-pressed="false" title="AI vision: live policy heatmap (V)"></button>
+        <div class="spacer"></div>
+        <button class="btn primary" id="newBtn" type="button" title="New puzzle (N)"></button>
+      </div>
+      <div class="insight" id="insight" hidden aria-live="polite"></div>
+      <div class="legend" id="legend"></div>
+      <div class="busy" id="busy"><div class="box"><div class="spinner"></div><span id="busyMsg">Working…</span>
+        <button class="btn sm" id="stopBtn" type="button" hidden>Stop</button></div></div>
+    </section>
+  </section>
+
+  <aside class="side" aria-label="Panels">
+    <div class="tabs" role="tablist" aria-label="Side panels">
+      <button role="tab" id="tab-game" aria-controls="pane-game" aria-selected="true" class="on" type="button">Game</button>
+      <button role="tab" id="tab-ai" aria-controls="pane-ai" aria-selected="false" type="button">AI lab</button>
+      <button role="tab" id="tab-race" aria-controls="pane-race" aria-selected="false" type="button">Race</button>
+    </div>
+
+    <!-- ============================================================ GAME -->
+    <div class="pane" id="pane-game" role="tabpanel" aria-labelledby="tab-game">
+      <section class="card">
+        <div class="card-head"><h2>Daily puzzles</h2><span class="streak" id="streak"></span></div>
+        <div class="muted" id="dailyDate"></div>
+        <div class="daily-grid" id="dailyGrid"></div>
+      </section>
+
+      <section class="card">
+        <div class="card-head"><h2>Personal bests</h2><span class="muted" id="solvedCount"></span></div>
+        <table class="records" id="records"></table>
+        <div class="muted tiny">Best times count only solves without hints. Stored in this browser only.</div>
+      </section>
+
+      <details class="card advanced" id="advanced">
+        <summary><h2>Custom puzzle</h2><span class="muted">type, size, seed, options</span></summary>
+        <div class="adv-body">
+          <div class="row"><label class="lbl" for="kind">Type</label>
+            <select id="kind" class="grow">
+              <option value="grid2d">2D grid</option>
+              <option value="walls">Walls</option>
+              <option value="islands">Islands</option>
+              <option value="mask">Irregular shape</option>
+              <option value="grid3d">3D cube</option>
+              <option value="grid4d">4D hypercube</option>
+            </select></div>
+          <div class="row"><label class="lbl" for="size" id="sizeLbl">Size</label>
+            <input id="size" type="number" class="grow" min="2" max="12" value="7"></div>
+          <div id="kindOpts"></div>
+          <div class="row"><label class="lbl" for="ncp">Checkpoints</label>
+            <input id="ncp" type="number" class="grow" min="2" placeholder="auto"></div>
+          <div class="row"><label class="lbl" for="seed">Seed</label>
+            <input id="seed" type="text" inputmode="numeric" class="grow" placeholder="random"></div>
+          <div class="row"><label class="check"><input type="checkbox" id="unique"> Unique solution</label></div>
+          <div class="note" id="uniqueNote" hidden>Proving uniqueness is slow in 3D/4D (often 5-20 s).</div>
+          <button class="btn primary block" id="customBtn" type="button">Generate custom puzzle</button>
+        </div>
+      </details>
+
+      <section class="card">
+        <div class="card-head"><h2>Display</h2></div>
+        <div class="row"><label class="check"><input type="checkbox" id="showLegal"> Show legal moves</label></div>
+        <div class="row"><label class="check"><input type="checkbox" id="showTimer" checked> Show timer</label></div>
+      </section>
+    </div>
+
+    <!-- ============================================================ AI LAB -->
+    <div class="pane" id="pane-ai" role="tabpanel" aria-labelledby="tab-ai" hidden>
+      <section class="card">
+        <div class="card-head"><h2>Model</h2><button class="icon-btn sm" id="refreshModels" type="button" aria-label="Rescan checkpoints" title="Rescan checkpoints/">&#x21bb;</button></div>
+        <div class="row"><label class="sr-only" for="model">Model</label><select id="model" class="grow"></select></div>
+        <div class="model-info" id="modelInfo"></div>
+      </section>
+
+      <section class="card">
+        <div class="card-head"><h2>AI vision</h2><label class="switch"><input type="checkbox" id="visionToggle"><span aria-hidden="true"></span><span class="sr-only">AI vision</span></label></div>
+        <p class="muted">Live overlay of what the network sees in <i>your</i> position: move probabilities on the candidate cells, a board-wide score heat, and its value estimate.</p>
+        <div class="row"><label class="check"><input type="checkbox" id="heatFull" checked> Board-wide heat (where it "looks")</label></div>
+        <div class="row"><label class="check"><input type="checkbox" id="heatCheck" checked> Solver verdict + greedy look-ahead</label></div>
+      </section>
+
+      <section class="card">
+        <div class="card-head"><h2>Solve this puzzle</h2></div>
+        <div class="seg wrap" id="modeSeg" role="group" aria-label="Solver">
+          <button type="button" data-mode="greedy" class="on" title="Policy alone: always the most probable move, no backtracking">Greedy</button>
+          <button type="button" data-mode="search" title="Policy-ordered depth-first search, basic pruning, node budget">Policy DFS</button>
+          <button type="button" data-mode="hybrid" title="Exact solver + GNN move ordering (complete)">Solver+GNN</button>
+          <button type="button" data-mode="exact" title="The exact solver alone">Exact</button>
+        </div>
+        <div class="note muted" id="modeNote"></div>
+        <div class="row"><label class="check"><input type="checkbox" id="watchThink" checked> Watch it think (replay the search)</label></div>
+        <div class="row" id="budgetRow" hidden><label class="lbl" for="budget">Budget</label>
+          <input id="budget" type="number" class="grow" min="10" step="500" value="5000"></div>
+        <div class="row"><label class="lbl" for="exactTL">Time limit</label>
+          <input id="exactTL" type="number" class="grow" min="1" max="60" value="10"><span class="muted">s</span></div>
+        <div class="row"><label class="lbl" for="speed">Speed</label>
+          <input id="speed" type="range" min="0" max="100" value="60" class="grow" aria-label="Animation speed"></div>
+        <div class="row"><label class="check"><input type="checkbox" id="fromPath"> Continue from my path</label></div>
+        <button class="btn agent block" id="runBtn" type="button"></button>
+      </section>
+
+      <section class="card" id="statsCard">
+        <div class="card-head"><h2>Last run</h2></div>
+        <table class="cmp" id="cmpTable">
+          <thead><tr><th></th><th id="aHead">Agent</th><th id="eHead">Exact</th></tr></thead>
+          <tbody>
+            <tr><td>Result</td><td id="aRes">-</td><td id="eRes">-</td></tr>
+            <tr><td>Path</td><td id="aLen">-</td><td id="eLen">-</td></tr>
+            <tr><td title="search nodes expanded (moves tried)">Expansions</td><td id="aNodes">-</td><td id="eNodes">-</td></tr>
+            <tr><td>Time</td><td id="aTime">-</td><td id="eTime">-</td></tr>
+            <tr class="hy" hidden><td title="GNN forward passes (skipped when a move is forced)">GNN calls</td><td id="aInf">-</td><td>0</td></tr>
+            <tr class="hy" hidden><td title="states whose policy scores were reused from the per-solve cache">Cache hits</td><td id="aCache">-</td><td>-</td></tr>
+            <tr class="hy" hidden><td title="time in GNN inference (+ observations) vs. in the solver's own search">GNN / search</td><td id="aSplit">-</td><td id="eSplit">-</td></tr>
+            <tr class="hy" hidden><td title="restart attempts">Attempts</td><td id="aAtt">-</td><td>-</td></tr>
+            <tr><td>Confidence</td><td id="aConf" colspan="2" class="wrap">-</td></tr>
+          </tbody>
+        </table>
+        <div class="note muted" id="hyNote" hidden>Fewer expansions does not mean faster: every GNN-ordered expansion pays for a forward pass (~1 ms), while the plain solver expands tens of thousands of nodes per second.</div>
+        <div class="conf-block" id="confBlock" hidden>
+          <div class="conf-title"><span>Agent's choice at step <b id="confStep">-</b></span><span id="confLegal"></span></div>
+          <div id="candList"></div>
+          <div class="conf-title" style="margin-top:8px"><span>Confidence per step</span><span class="muted">p(chosen move)</span></div>
+          <div class="spark-wrap"><svg class="spark" id="spark" preserveAspectRatio="none"></svg><div class="tip" id="sparkTip"></div></div>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-head"><h2>Compare models</h2></div>
+        <p class="muted">Run several checkpoints on this puzzle, side by side.</p>
+        <div class="cmp-models" id="cmpModels"></div>
+        <div class="row">
+          <div class="seg small" id="cmpModeSeg" role="group" aria-label="Comparison mode">
+            <button type="button" data-mode="greedy" class="on">Greedy</button>
+            <button type="button" data-mode="search">Policy DFS</button>
+            <button type="button" data-mode="hybrid">Solver+GNN</button>
+          </div>
+        </div>
+        <button class="btn block" id="cmpBtn" type="button">Compare</button>
+        <div class="cmp-results" id="cmpResults"></div>
+      </section>
+    </div>
+
+    <!-- ============================================================ RACE -->
+    <div class="pane" id="pane-race" role="tabpanel" aria-labelledby="tab-race" hidden>
+      <section class="card">
+        <div class="card-head"><h2>You vs AI</h2><span class="muted" id="raceRecord"></span></div>
+        <p class="muted">Same puzzle, same clock. The AI plays on the mini board next to yours, at its own pace. Greedy agents can paint themselves into a corner.</p>
+        <div class="opp-list" id="oppList" role="radiogroup" aria-label="Opponent"></div>
+        <div class="row"><label class="lbl" for="racePace">AI pace</label>
+          <input id="racePace" type="range" min="0" max="100" value="50" class="grow"><span class="muted mono" id="racePaceLbl"></span></div>
+        <div class="row"><label class="check"><input type="checkbox" id="raceFresh" checked> Fresh puzzle (current difficulty)</label></div>
+        <button class="btn agent block" id="raceBtn" type="button"></button>
+      </section>
+    </div>
+  </aside>
+</main>
+
+<!-- win / race result -->
+<div class="modal" id="winModal" role="dialog" aria-modal="true" aria-labelledby="winTitle">
+  <div class="card modal-card win-card">
+    <button class="icon-btn sm close" id="winX" type="button" aria-label="Close"></button>
+    <div class="win-badge" id="winBadge"></div>
+    <div class="kicker" id="winKicker">Puzzle solved</div>
+    <h2 id="winTitle">You did it!</h2>
+    <div class="big mono" id="winTime">0:00</div>
+    <div class="pb" id="winPb" hidden></div>
+    <div class="win-stats" id="winStats"></div>
+    <pre class="share-text" id="shareText"></pre>
+    <div class="btn-row">
+      <button class="btn" id="shareBtn" type="button"></button>
+      <button class="btn" id="winWatch" type="button"></button>
+      <button class="btn primary" id="winNew" type="button"></button>
+    </div>
+  </div>
+</div>
+
+<!-- how to play -->
+<div class="modal" id="helpModal" role="dialog" aria-modal="true" aria-labelledby="helpTitle">
+  <div class="card modal-card help-card">
+    <button class="icon-btn sm close" data-close type="button" aria-label="Close"></button>
+    <h2 id="helpTitle">How to play Zip</h2>
+    <div class="howto">
+      <div class="howto-demo" aria-hidden="true">
+        <svg viewBox="0 0 150 150" class="demo">
+          <g class="demo-cells"></g>
+          <path class="demo-path" d="M25 25 H125 V75 H25 V125 H125" pathLength="1"/>
+          <g class="demo-cps"></g>
+        </svg>
+      </div>
+      <ol class="howto-steps">
+        <li><b>Start at 1</b> and draw one continuous line through the numbered dots <b>in order</b>.</li>
+        <li><b>Fill every cell</b> exactly once; finish on the last number.</li>
+        <li><b>Drag</b> to draw, drag back (or tap an earlier cell) to undo. Arrow keys work too.</li>
+        <li>Walls block moves. Wooden <b>bridges</b> join the islands. 3D/4D puzzles show layers as panels; badges mark where the line changes layer.</li>
+      </ol>
+    </div>
+    <p class="muted">Stuck? <b>Hint</b> asks the exact solver. Curious? Turn on <b>AI vision</b> to see what the neural network would play, or <b>race</b> it.</p>
+    <div class="btn-row"><button class="btn primary" data-close type="button">Let's play</button></div>
+  </div>
+</div>
+
+<!-- shortcuts -->
+<div class="modal" id="keysModal" role="dialog" aria-modal="true" aria-labelledby="keysTitle">
+  <div class="card modal-card">
+    <button class="icon-btn sm close" data-close type="button" aria-label="Close"></button>
+    <h2 id="keysTitle">Keyboard shortcuts</h2>
+    <table class="keys" id="keysTable"></table>
+    <div class="btn-row"><button class="btn" data-close type="button">Close</button></div>
+  </div>
+</div>
+
+<div class="countdown" id="countdown" aria-live="assertive"></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<canvas id="confetti" aria-hidden="true"></canvas>
+<script type="module" src="/static/app.js"></script>
+</body>
+</html>

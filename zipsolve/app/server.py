@@ -20,8 +20,8 @@ Endpoints (JSON):
     GET  /api/daily        ?difficulty=&date=YYYY-MM-DD  deterministic daily puzzle
     ("trace": true on /api/solve/exact and /api/solve/rl search|hybrid returns the
     search's push/pop events for the "watch it think" visualisation.)
-Pages: / (the casual game), /lab (AI lab: power-user play page with AI vision, solver
-replays, model comparison, custom options), /dashboard and /editor (served when their files exist; their
+Pages: / (the casual game), /lab (the AI show: watch the robots think, robot vs robot),
+/workbench (power-user AI page: AI vision, solver replays, model comparison, custom options), /dashboard and /editor (served when their files exist; their
 APIs are optional routers from dashboard_api.py / editor_api.py).
 CPU-heavy work runs in the threadpool; every call has a time limit.
 """
@@ -397,8 +397,12 @@ def create_app(checkpoint_dir: str | Path | None = None) -> FastAPI:
         return FileResponse(f, headers={"Cache-Control": "no-cache"})
 
     @app.get("/lab")
-    def lab_page():
+    def lab_page():   # the AI show (watch the robots think, robot vs robot)
         return _page("lab.html")
+
+    @app.get("/workbench")
+    def workbench_page():   # the power-user AI page (models, limits, compare, AI vision)
+        return _page("workbench.html")
 
     @app.get("/dashboard")
     def dashboard_page():

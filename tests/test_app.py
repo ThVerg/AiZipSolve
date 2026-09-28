@@ -37,8 +37,17 @@ def test_index_and_static(client):
 
 
 def test_lab_page(client):
-    # the power-user play page (AI vision, solver replays, compare, custom options) lives at /lab
+    # /lab is the AI show (watch the robots think, robot vs robot)
     r = client.get("/lab")
+    assert r.status_code == 200 and r.headers.get("cache-control") == "no-cache"
+    assert "/static/show.js" in r.text and 'id="watchBtn"' in r.text and 'id="faceoff"' in r.text
+    for f in ("show.js", "show.css", "play/modes.js"):
+        assert client.get(f"/static/{f}").status_code == 200, f
+
+
+def test_workbench_page(client):
+    # the power-user AI page (AI vision, solver replays, compare, custom options) lives at /workbench
+    r = client.get("/workbench")
     assert r.status_code == 200 and r.headers.get("cache-control") == "no-cache"
     assert "/static/app.js" in r.text and 'id="pane-ai"' in r.text
 

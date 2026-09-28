@@ -7,14 +7,14 @@
   <meta name="theme-color" content="#f7f1e8">
   <title>Zip</title>
   <script>
-    // old power-user links: /?model=<name> (dashboard) and #kind=… with advanced options live in the AI Lab
+    // old power-user links: /?model=<name> (dashboard) -> the AI show; #kind=… with advanced options -> the AI workbench
     (function () {
       try {
         if (new URLSearchParams(location.search).has("model")) { location.replace("/lab" + location.search + location.hash); return; }
         var h = new URLSearchParams(location.hash.slice(1)), k = h.get("kind");
         if (k) {
           var adv = !/^(grid2d|walls|islands|grid3d)$/.test(k) || h.has("cp") || [].some.call(Array.from(h.keys()), function (x) { return x.indexOf("opt.") === 0; });
-          if (adv) location.replace("/lab" + location.hash);
+          if (adv) location.replace("/workbench" + location.hash);
         }
       } catch (e) { /* ignore */ }
     })();
@@ -71,7 +71,7 @@
   <button type="button" class="mi" data-act="theme"><span class="mi-ic">🌗</span>Light / dark</button>
   <hr>
   <a class="mi" href="/editor"><span class="mi-ic">✏️</span>Puzzle editor</a>
-  <a class="mi" href="/lab" id="labLink"><span class="mi-ic">🧪</span>AI Lab</a>
+  <a class="mi" href="/lab" id="labLink"><span class="mi-ic">🤖</span>AI show</a>
   <a class="mi" href="/dashboard"><span class="mi-ic">📈</span>Training dashboard</a>
 </nav>
 

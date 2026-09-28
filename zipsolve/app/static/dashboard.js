@@ -901,7 +901,7 @@ function renderCkpts() {
       h("td", null, cell(m && m.val_score != null ? fmtPct(m.val_score, 0) : "–")),
       h("td", null, fmtBytes(c.size)),
       h("td", { title: new Date(c.mtime * 1000).toLocaleString() }, fmtAgo(now - c.mtime)),
-      h("td", null, h("a", { class: "play-link", href: `/lab?model=${encodeURIComponent(c.name)}`, title: "Open the AI Lab with this model" }, "Play ▸"), " ",
+      h("td", null, h("a", { class: "play-link", href: `/lab?model=${encodeURIComponent(c.name)}`, title: "Watch this model in the AI show" }, "Play ▸"), " ",
         h("button", { class: "linkbtn", onclick: () => toggleMeta(c.name), "aria-expanded": open ? "true" : "false" }, open ? "Hide" : "Details")));
     tb.append(tr);
     if (c.meta_error) tr.title = c.meta_error;

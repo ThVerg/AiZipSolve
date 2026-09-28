@@ -12,6 +12,10 @@ frozen benchmark sets (benchmarks/val.json, test.json) are excluded.
 
 Usage:
     python scripts/build_hf_dataset.py --n 1000000 --workers 48 --out hf_dataset
+Extend an existing build to 10M unique puzzles (fresh seeds, dedup against it,
+sizes weighted by cell count so small boards don't run out of distinct puzzles):
+    python scripts/build_hf_dataset.py --n 9500000 --weight nodes --index-offset 10000000 \
+        --existing hf_dataset/data --target-total 10000000 --tag x1 --out hf_dataset_x1
 Layout:
     <out>/data/<split>/<family>-<shard>.parquet   (split = train / validation / test)
     <out>/stats.json
@@ -25,7 +29,7 @@ import math
 import os
 import time
 from collections import Counter, defaultdict
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 from pathlib import Path
 
 import numpy as np
@@ -49,6 +53,11 @@ def canonical_hash(coords, edges, checkpoints) -> str:
     h.update(np.asarray(sorted(tuple(sorted(e)) for e in edges), dtype=np.int32).tobytes())
     h.update(np.asarray(checkpoints, dtype=np.int32).tobytes())
     return h.hexdigest()[:16]
+
+
+def approx_nodes(family: str, size: int) -> float:
+    return {"grid2d": size ** 2, "walls": size ** 2, "mask": 0.75 * size ** 2, "islands": 14.0 * size,
+            "islands_chain": 12.0 * size, "grid3d": size ** 3, "grid4d": size ** 4}[family]
 
 
 def size_label(family: str, size: int) -> str:
@@ -109,7 +118,7 @@ def make_row(family: str, size: int, index: int, solver_time: float) -> dict | N
 
 
 def work(task):
-    family, size, start, count, solver_time = task
+    family, size, start, count, solver_time = task[:5]
     rows = []
     for i in range(start, start + count):
         row = make_row(family, size, i, solver_time)
@@ -145,6 +154,13 @@ def main(argv=None):
     ap.add_argument("--chunk", type=int, default=250, help="puzzles per worker task")
     ap.add_argument("--shard-rows", type=int, default=50_000)
     ap.add_argument("--solver-time", type=float, default=1.0)
+    ap.add_argument("--weight", choices=["uniform", "nodes"], default="uniform",
+                    help="split each family's share over sizes uniformly or by cell count")
+    ap.add_argument("--index-offset", type=int, default=0, help="first puzzle index (new seeds)")
+    ap.add_argument("--existing", nargs="*", default=[], help="parquet dirs of earlier builds to dedup against")
+    ap.add_argument("--target-total", type=int, default=0,
+                    help="stop once existing + new unique rows reach this (0 = run all tasks)")
+    ap.add_argument("--tag", default="", help="shard name tag, e.g. x1 -> grid2d-x1-00000.parquet")
     args = ap.parse_args(argv)
 
     import pyarrow as pa
@@ -167,12 +183,23 @@ def main(argv=None):
     exclude = benchmark_hashes(root)
     print(f"excluding {len(exclude)} benchmark puzzles", flush=True)
 
+    existing: set[str] = set()
+    for d in args.existing:
+        for f in sorted(Path(d).rglob("*.parquet")):
+            existing.update(pq.read_table(f, columns=["id"]).column("id").to_pylist())
+    if existing:
+        print(f"deduplicating against {len(existing)} existing puzzles", flush=True)
+
     tasks = []
     for fam, (sizes, share) in FAMILIES.items():
-        per_size = math.ceil(args.n * share / len(sizes))
-        for s in sizes:
+        w = [approx_nodes(fam, s) if args.weight == "nodes" else 1.0 for s in sizes]
+        for s, ws in zip(sizes, w):
+            per_size = math.ceil(args.n * share * ws / sum(w))
             for start in range(0, per_size, args.chunk):
-                tasks.append((fam, s, start, min(args.chunk, per_size - start), args.solver_time))
+                tasks.append((fam, s, args.index_offset + start, min(args.chunk, per_size - start),
+                              args.solver_time))
+    # random order, so stopping at --target-total keeps the family / size mix balanced
+    np.random.default_rng(SEED_TAG).shuffle(tasks)
     total = sum(t[3] for t in tasks)
     print(f"{len(tasks)} tasks, {total} puzzles requested, {args.workers} workers", flush=True)
 
@@ -188,7 +215,8 @@ def main(argv=None):
             split, fam = key
             d = out / "data" / split
             d.mkdir(parents=True, exist_ok=True)
-            pq.write_table(pa.Table.from_pylist(part, schema=schema), d / f"{fam}-{shard_no[key]:05d}.parquet",
+            tag = f"{args.tag}-" if args.tag else ""
+            pq.write_table(pa.Table.from_pylist(part, schema=schema), d / f"{fam}-{tag}{shard_no[key]:05d}.parquet",
                            compression="zstd")
             shard_no[key] += 1
             if not force:
@@ -196,33 +224,61 @@ def main(argv=None):
 
     t0 = time.time()
     done = 0
+    def handle(rows):
+        """Dedup + buffer one finished batch. Returns False once the target is reached."""
+        fam = rows[0]["family"] if rows else None
+        for row in rows:
+            if args.target_total and len(existing) + len(seen) >= args.target_total:
+                return False  # exact stop: never write more than the target
+            if row["id"] in exclude:
+                stats["excluded"] += 1
+                continue
+            if row["id"] in seen or row["id"] in existing:
+                stats["dupes"] += 1
+                continue
+            seen.add(row["id"])
+            split = split_of(row["id"])
+            row["split"] = split
+            stats["rows"][f"{split}/{fam}"] += 1
+            stats["solver_status"][row["solver_status"]] += 1
+            key = (split, fam)
+            buffers[key].append(row)
+            flush(key)
+        return not (args.target_total and len(existing) + len(seen) >= args.target_total)
+
+    # bounded submission: finished futures are dropped right away, so memory stays
+    # flat no matter how many puzzles are generated (holding every Future's result
+    # list is what OOM-killed the first 10M attempt)
     with ProcessPoolExecutor(args.workers) as ex:
-        futs = [ex.submit(work, t) for t in tasks]
-        for f in as_completed(futs):
-            fam, rows = f.result()
-            done += 1
-            for row in rows:
-                if row["id"] in exclude:
-                    stats["excluded"] += 1
-                    continue
-                if row["id"] in seen:
-                    stats["dupes"] += 1
-                    continue
-                seen.add(row["id"])
-                split = split_of(row["id"])
-                row["split"] = split
-                stats["rows"][f"{split}/{fam}"] += 1
-                stats["solver_status"][row["solver_status"]] += 1
-                key = (split, fam)
-                buffers[key].append(row)
-                flush(key)
-            if done % 200 == 0 or done == len(futs):
-                el = time.time() - t0
-                print(f"  {done}/{len(futs)} tasks, {len(seen)} rows, {el:.0f}s", flush=True)
+        pending, it, running = set(), iter(tasks), True
+        while running:
+            while len(pending) < args.workers * 4:
+                t = next(it, None)
+                if t is None:
+                    break
+                pending.add(ex.submit(work, t))
+            if not pending:
+                break
+            finished, pending = wait(pending, return_when=FIRST_COMPLETED)
+            for f in finished:
+                _, rows = f.result()
+                done += 1
+                if not handle(rows):
+                    running = False
+                    break
+                if done % 200 == 0:
+                    el = time.time() - t0
+                    print(f"  {done}/{len(tasks)} tasks, {len(seen)} rows, {el:.0f}s", flush=True)
+            del finished
+        if not running:
+            print(f"reached target {args.target_total}; cancelling remaining tasks", flush=True)
+            for f in pending:
+                f.cancel()
     for key in list(buffers):
         flush(key, force=True)
 
     stats["total"] = len(seen)
+    stats["existing"] = len(existing)
     stats["requested"] = total
     stats["failed"] = total - len(seen) - stats["dupes"] - stats["excluded"]
     stats["seconds"] = round(time.time() - t0, 1)
