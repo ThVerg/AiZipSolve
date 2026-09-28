@@ -91,15 +91,17 @@ python -m zipsolve.rl.benchmark run --ckpt checkpoints/ft_best.pt --set val
 ## Dataset
 
 **[FAVERG/zip-puzzles](https://huggingface.co/datasets/FAVERG/zip-puzzles)** on Hugging Face:
-990k solvable puzzles with solutions across every family (2D 4–12, walls, masks, organic islands,
-3D up to 6³, 4D up to 4⁴), with exact-solver difficulty stats and train / validation / test splits.
+**10 million** unique, solvable puzzles with solutions across every family (2D 4–12, walls, masks,
+organic islands, 3D up to 6³, 4D up to 4⁴), with exact-solver difficulty stats and 90 / 5 / 5
+train / validation / test splits (1.6 GB of Parquet).
 
 ```python
 from datasets import load_dataset
 ds = load_dataset("FAVERG/zip-puzzles", "islands")
 ```
 
-Rebuild it with `python scripts/build_hf_dataset.py --n 1000000 --workers 48`.
+Rebuild it with `python scripts/build_hf_dataset.py --n 1000000 --workers 48`; larger builds can be
+extended in parts (`--existing … --target-total 10000000`) and merged with `scripts/merge_hf_dataset.py`.
 
 ## Tests
 

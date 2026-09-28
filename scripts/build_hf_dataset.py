@@ -128,7 +128,8 @@ def work(task):
 
 
 def split_of(pid: str) -> str:
-    x = int(pid[:8], 16) % 100
+    # hash digits 8..16: independent of anything used for selection (see merge_hf_dataset.py)
+    x = int(pid[8:16], 16) % 100
     return "test" if x < 5 else "validation" if x < 10 else "train"
 
 
