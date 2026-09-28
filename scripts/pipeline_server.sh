@@ -5,10 +5,10 @@
 #   3. DAgger rounds (solver labels on the policy's own mistakes) from the better one
 #   4. PPO fine-tuning with the all-family curriculum + validation / best.pt
 #   5. frozen benchmark (val, then test) over every model incl. the old PPO baseline
-# Usage: nohup bash scripts/pipeline_faverg.sh > runs/pipe/nohup.out 2>&1 &
+# Usage: nohup bash scripts/pipeline_server.sh > runs/pipe/nohup.out 2>&1 &
 set -euo pipefail
 cd "$(dirname "$0")/.."
-P=${PYTHON:-$HOME/venvs/faniszip/bin/python}
+P=${PYTHON:-$HOME/venvs/aizipsolve/bin/python}
 W=${WORKERS:-48}          # worker processes for generation / labelling
 T=${THREADS:-16}          # torch threads per training process
 N=${N_PUZZLES:-20000}

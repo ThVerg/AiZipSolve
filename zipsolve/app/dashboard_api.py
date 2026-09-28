@@ -56,7 +56,7 @@ class _Cfg:
     root: Path = ROOT
     runs_dir: Path = ROOT / "runs"
     ckpt_dir: Path = Path(os.environ.get("ZIPSOLVE_CHECKPOINTS") or ROOT / "checkpoints")
-    sync_host: str = os.environ.get("ZIPSOLVE_SYNC_HOST", "faverg")
+    sync_host: str = os.environ.get("ZIPSOLVE_SYNC_HOST", "zipserver")
     sync_fn: Callable[..., dict] | None = None  # default: scripts/sync_runs.py:sync
     sync_timeout: float = 240.0
     sync_debounce: float = 15.0

@@ -1,7 +1,7 @@
 """Mirror training logs + selected checkpoints from a remote training host.
 
-    python scripts/sync_runs.py                      # host faverg -> runs/remote/faverg, checkpoints/remote/faverg
-    python scripts/sync_runs.py --host faverg --remote-dir FanisZipSolve --json
+    python scripts/sync_runs.py                      # host zipserver -> runs/remote/zipserver, checkpoints/remote/zipserver
+    python scripts/sync_runs.py --host zipserver --remote-dir AiZipSolve --json
 
 Read-only on the remote: only ``ssh <host> <read-only command>`` and rsync/tar
 pulls FROM it. What is copied:
@@ -140,7 +140,7 @@ def _tar_pull(host, remote_dir, sub, dst: Path, includes, max_mb, recursive, tim
     return changed
 
 
-def sync(host: str = "faverg", remote_dir: str = "FanisZipSolve", root: Path | str = ROOT,
+def sync(host: str = "zipserver", remote_dir: str = "AiZipSolve", root: Path | str = ROOT,
          checkpoints: bool = True, max_run_mb: int = 20, max_ckpt_mb: int = 300,
          timeout: float = 240.0, method: str = "auto") -> dict:
     """Pull runs/ + selected checkpoints from ``host``. Returns a JSON-able result dict
@@ -201,8 +201,8 @@ def sync(host: str = "faverg", remote_dir: str = "FanisZipSolve", root: Path | s
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--host", default="faverg")
-    ap.add_argument("--remote-dir", default="FanisZipSolve", help="project dir on the host (relative to ~)")
+    ap.add_argument("--host", default="zipserver")
+    ap.add_argument("--remote-dir", default="AiZipSolve", help="project dir on the host (relative to ~)")
     ap.add_argument("--root", default=str(ROOT), help="local project root")
     ap.add_argument("--no-checkpoints", action="store_true")
     ap.add_argument("--max-ckpt-mb", type=int, default=300)

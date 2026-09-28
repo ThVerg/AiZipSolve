@@ -1,4 +1,4 @@
-# FanisZipSolve
+# AiZipSolve
 
 LinkedIn's **Zip** puzzle — draw one line through every cell, passing the numbers in order —
 generalised to **any graph**: classic grids, walls, islands joined by bridges, irregular shapes,
@@ -47,7 +47,7 @@ order. Grids, walls, islands, 3D and 4D are just different graph builders.
 ### The agent
 
 A message-passing GNN never sees coordinates, so one model plays 2D, islands, 3D and 4D.
-Training pipeline (`scripts/pipeline_faverg.sh`):
+Training pipeline (`scripts/pipeline_server.sh`):
 
 1. Generate ~20k puzzles; the solver labels every legal move as win / lose / unknown.
 2. Supervised pretraining on the winning-move sets (forced moves skipped).
