@@ -16,3 +16,4 @@ checkpoints/*
 # user content / local state
 puzzles/custom/
 .sync.json
+/dist/

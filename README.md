@@ -1,35 +1,47 @@
 # AiZipSolve
 
+[![CI](https://github.com/ThVerg/AiZipSolve/actions/workflows/ci.yml/badge.svg)](https://github.com/ThVerg/AiZipSolve/actions/workflows/ci.yml)
+
 LinkedIn's **Zip** puzzle — draw one line through every cell, passing the numbers in order —
 generalised to **any graph**: classic grids, walls, islands joined by bridges, irregular shapes,
 **3D cubes and 4D hypercubes**. Comes with a fun web game, a puzzle editor, an exact solver and
 a graph-neural-network agent trained with imitation learning + reinforcement learning.
 
 <p align="center">
-  <img src="docs/images/home.png" width="260" alt="Home screen">
-  <img src="docs/images/islands.png" width="520" alt="Islands mode">
+  <img src="docs/images/demo.gif" width="720" alt="Drawing today's Zip, then a robot race in the AI show">
 </p>
 
-## Play
+<h3 align="center"><a href="https://thverg.github.io/AiZipSolve/">▶ Play online</a></h3>
+
+- **Today's Zip** — a daily puzzle with streaks and best times.
+- **Modes** — Classic (Easy / Medium / Hard), Walls, Islands, 3D Cube.
+- **Race the robot** — Rookie 🐣, Scout 🦊 or Grandmaster 🦉 play the same puzzle beside you.
+- **Show me 🤖** — the robot finishes the puzzle from wherever you are.
+- **AI show** — watch a robot hit dead ends and back up; robot vs robot face-offs.
+
+The online version is a static site (GitHub Pages): puzzles come from a curated bank of
+unique-solution puzzles with pre-recorded robot runs (`zipsolve/app/static/bank/`), so it needs no
+server. The puzzle editor, the AI workbench (live model, "AI vision" heat maps, custom options) and
+the training dashboard need the local app.
+
+## Run locally
 
 ```bash
 pip install -e .            # Python 3.11+, CPU is fine
 python -m zipsolve.app      # opens http://127.0.0.1:8000
 ```
 
-- **Today's Zip** — a daily puzzle with streaks and best times.
-- **Modes** — Classic (Easy / Medium / Hard), Walls, Islands, 3D Cube.
-- **Race the robot** — Rookie 🐣, Scout 🦊 or Grandmaster 🦉 play the same puzzle beside you.
-- **Show me 🤖** — the solver finishes the puzzle from wherever you are.
-- ☰ menu: **Puzzle editor** (draw your own maps, check solvable / unique, save and play),
-  **AI show** (`/lab`: watch a robot look at the board, hit dead ends and back up; robot vs robot
-  face-offs; power-user controls live in the workbench at `/workbench`) and a
-  **Training dashboard** (`/dashboard`).
+Everything online plus: ☰ **Puzzle editor** (draw your own maps, check solvable / unique, save and
+play), live robots on any puzzle in the **AI show** (`/lab`), the power-user **workbench**
+(`/workbench`) and the **training dashboard** (`/dashboard`).
 
 <p align="center">
   <img src="docs/images/race.png" width="260" alt="Race the robot">
   <img src="docs/images/cube3d.png" width="520" alt="3D cube">
 </p>
+
+Build the static site yourself with `python scripts/build_site.py` (standard library only; output in
+`dist/`, deployed by `.github/workflows/pages.yml` on every push to `main`).
 
 ## How it works
 

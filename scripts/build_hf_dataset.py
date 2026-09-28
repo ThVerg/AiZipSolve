@@ -153,6 +153,8 @@ def main(argv=None):
     ap.add_argument("--out", default="hf_dataset")
     ap.add_argument("--chunk", type=int, default=250, help="puzzles per worker task")
     ap.add_argument("--shard-rows", type=int, default=50_000)
+    ap.add_argument("--max-buffered", type=int, default=150_000,
+                    help="rows held in memory across all shards before the largest is written early")
     ap.add_argument("--solver-time", type=float, default=1.0)
     ap.add_argument("--weight", choices=["uniform", "nodes"], default="uniform",
                     help="split each family's share over sizes uniformly or by cell count")
@@ -220,10 +222,13 @@ def main(argv=None):
                            compression="zstd")
             shard_no[key] += 1
             if not force:
+                buffered[0] -= len(part)
                 break
 
     t0 = time.time()
     done = 0
+    buffered = [0]
+
     def handle(rows):
         """Dedup + buffer one finished batch. Returns False once the target is reached."""
         fam = rows[0]["family"] if rows else None
@@ -244,6 +249,13 @@ def main(argv=None):
             key = (split, fam)
             buffers[key].append(row)
             flush(key)
+            buffered[0] += 1
+            if buffered[0] >= args.max_buffered:
+                # slow-filling shards (validation/test, rare families) are written early so
+                # memory stays bounded; this crashed a 10M build once
+                big = max(buffers, key=lambda k: len(buffers[k]))
+                flush(big, force=True)
+                buffered[0] = sum(len(v) for v in buffers.values())
         return not (args.target_total and len(existing) + len(seen) >= args.target_total)
 
     # bounded submission: finished futures are dropped right away, so memory stays

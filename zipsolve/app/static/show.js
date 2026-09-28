@@ -1,7 +1,7 @@
 // Zip — the AI show (/lab). Pick a puzzle, watch a robot "look" at the board (the network's heat glow),
 // try branches, hit dead ends and back up; or race two robots on the same puzzle. Plain words, no tables:
 // the numbers live behind "Nerd mode" (and in the workbench at /workbench).
-import { $, h, api, store, icon, clamp, sleep, reducedMotion, fmtInt, svgEl as el } from "./play/util.js";
+import { $, h, api, PAGES, store, icon, clamp, sleep, reducedMotion, fmtInt, svgEl as el } from "./play/util.js";
 import { Board, makeModel } from "./play/board.js";
 import { sound } from "./play/sound.js";
 import { createFx } from "./play/fx.js";
@@ -80,7 +80,7 @@ function paintBack() {
   const b = $("backBtn");
   b.innerHTML = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>';
   b.setAttribute("aria-label", S.screen === "pick" ? "Back to the game" : "Back to the AI show");
-  b.href = S.screen === "pick" ? "/" : "/lab";
+  b.href = S.screen === "pick" ? PAGES.home : PAGES.lab;
 }
 function stopAll() {
   if (S.watch) { S.watch.stop(); S.watch = null; }
@@ -145,9 +145,10 @@ function titleFor(src, d) {
   return [m.label, shape.replace(/×/g, " × ")];
 }
 function beatLink(src) {
-  if (src.type === "daily") return `/#daily=${encodeURIComponent(src.difficulty)}&date=${src.date}`;
-  if (src.type === "custom") return `/#custom=${encodeURIComponent(src.id)}`;
-  return `/#play=${src.mode}&diff=${src.diff}&seed=${src.seed}`;
+  const home = PAGES.home;
+  if (src.type === "daily") return `${home}#daily=${encodeURIComponent(src.difficulty)}&date=${src.date}`;
+  if (src.type === "custom") return `${home}#custom=${encodeURIComponent(src.id)}`;
+  return `${home}#play=${src.mode}&diff=${src.diff}&seed=${src.seed}`;
 }
 function srcHash(src) {
   if (src.type === "daily") return `daily=${encodeURIComponent(src.difficulty)}&date=${src.date}`;

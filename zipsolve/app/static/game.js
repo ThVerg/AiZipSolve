@@ -1,6 +1,6 @@
 // Zip — the casual game page (/). Home (daily + modes), a big-board game shell, "Show me" robot solves,
 // Race the robot, and a first-visit tutorial. The AI show lives at /lab (show.js).
-import { $, h, api, fmtTime, store, icon, localDateISO, addDays, clamp, sleep, reducedMotion, cssVar } from "./play/util.js";
+import { $, h, api, PAGES, fmtTime, store, icon, localDateISO, addDays, clamp, sleep, reducedMotion, cssVar } from "./play/util.js";
 import { Board, makeModel } from "./play/board.js";
 import { MODES, ROBOTS, genParams, modeArt } from "./play/modes.js";
 import { sound } from "./play/sound.js";
@@ -18,7 +18,7 @@ const PRESETS = {
   insane: { label: "Insane", kind: "grid3d", size: 4, unique: false, options: {} },
 };
 const KIND_MODE = { grid2d: "classic", walls: "walls", islands: "islands", grid3d: "cube" };
-const RACE_PUZZLE = { kind: "grid2d", size: 6, unique: true };
+const RACE_PUZZLE = { kind: "grid2d", size: 6, unique: true, bank: "classic-medium" };
 const WIN_TITLES = ["Nice!", "Brilliant!", "Smooth!", "Nailed it!", "Zipped!", "Beautiful!"];
 const EPOCH = new Date(2026, 0, 1);
 
@@ -138,13 +138,17 @@ function buildArt() {
 }
 
 // ------------------------------------------------------------------ puzzle loading
-function titleFor(src, d) {
+// rating: the puzzle's human difficulty ({label, score} from the bank or the server's rater), shown instead of the
+// nominal difficulty so "Hard" means hard
+function titleFor(src, d, rating = null) {
   const shape = d.meta && d.meta.shape ? d.meta.shape.join("×") : "";
-  if (src.type === "daily") return [`Zip #${src.number}`, `Daily · ${src.label}`];
+  const real = rating && rating.label;
+  if (src.type === "daily") return [`Zip #${src.number}`, src.difficulty === "special" ? `Sunday special${real ? ` · ${real}` : ""}` : `Daily · ${real || src.label}`];
   if (src.type === "mode") {
     const m = MODES[src.mode], df = m.diffs[src.diff];
     const isl = d.meta && d.meta.island ? new Set(d.meta.island).size : 0;
-    const sub = src.mode === "classic" ? `${df.label} · ${shape}` : isl ? `${isl} islands` : src.mode === "walls" ? `${shape} · mind the walls` : shape ? shape.replace(/×/g, " × ") : df.label;
+    let sub = src.mode === "classic" ? `${real || df.label} · ${shape}` : isl ? `${isl} islands` : src.mode === "walls" ? `${shape} · mind the walls` : shape ? shape.replace(/×/g, " × ") : df.label;
+    if (real && src.mode !== "classic") sub += ` · ${real}`;
     return [m.label, sub];
   }
   if (src.type === "race") return [`vs ${src.bot.name}`, `Race · ${shape}`];
@@ -161,8 +165,10 @@ function loadPuzzle(res, src) {
   board.setPuzzle(G.P);
   game.setPuzzle(G.P);
   game.locked = false;
-  const [t, sub] = titleFor(src, d);
+  G.rating = res.rating || null;
+  const [t, sub] = titleFor(src, d, G.rating);
   $("gTitle").textContent = t; $("gSub").textContent = sub;
+  $("gSub").title = G.rating && G.rating.score != null ? `Difficulty ${Math.round(G.rating.score)}/100 (rated by how much a person has to think ahead)` : "";
   document.title = t.startsWith("Zip") ? t : `${t} · Zip`;
   document.body.classList.toggle("racing", src.type === "race");
   document.body.classList.toggle("dim3", G.P.dim >= 3);
@@ -212,7 +218,7 @@ function playMode(mode, diff, seed = null, push = false) {
     (res) => `#play=${mode}&diff=${diff}&seed=${res.seed}`, push);
 }
 function playDaily(diff = "medium", date = today(), push = false) {
-  if (!PRESETS[diff]) diff = "medium";
+  if (!PRESETS[diff] && diff !== "special") diff = "medium";
   return fetchAndLoad(() => api(`/api/daily?difficulty=${encodeURIComponent(diff)}&date=${encodeURIComponent(date)}`),
     (res) => ({ type: "daily", ...res.daily }), (res) => `#daily=${diff}&date=${res.daily.date}`, push);
 }
@@ -926,8 +932,8 @@ function init() {
   $("labLink").addEventListener("click", () => {
     // carry the current puzzle into the AI show ("watch the robot solve this one")
     const hh = location.hash;
-    if (/^#(daily|custom|play)=/.test(hh)) $("labLink").href = "/lab" + hh;
-    else $("labLink").href = "/lab";
+    if (/^#(daily|custom|play)=/.test(hh)) $("labLink").href = PAGES.lab + hh;
+    else $("labLink").href = PAGES.lab;
   });
 
   $("heroPlay").onclick = () => playDaily("medium", today(), true);

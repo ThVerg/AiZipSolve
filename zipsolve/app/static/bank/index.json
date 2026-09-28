@@ -1,0 +1,75 @@
+{
+ "version": 1,
+ "generated": "2026-09-28T14:20:00+00:00",
+ "daily_start": "2026-01-01",
+ "daily_end": "2027-12-31",
+ "daily_epoch": "2026-01-01",
+ "labels": [
+  "Easy",
+  "Medium",
+  "Hard",
+  "Expert",
+  "Insane"
+ ],
+ "robots": "robots/{id}.json",
+ "modes": {
+  "classic": {
+   "easy": {
+    "file": "pools/classic-easy.json",
+    "count": 80
+   },
+   "medium": {
+    "file": "pools/classic-medium.json",
+    "count": 80
+   },
+   "hard": {
+    "file": "pools/classic-hard.json",
+    "count": 80
+   }
+  },
+  "walls": {
+   "easy": {
+    "file": "pools/walls-easy.json",
+    "count": 80
+   },
+   "medium": {
+    "file": "pools/walls-medium.json",
+    "count": 80
+   },
+   "hard": {
+    "file": "pools/walls-hard.json",
+    "count": 80
+   }
+  },
+  "islands": {
+   "easy": {
+    "file": "pools/islands-easy.json",
+    "count": 80
+   },
+   "medium": {
+    "file": "pools/islands-medium.json",
+    "count": 80
+   },
+   "hard": {
+    "file": "pools/islands-hard.json",
+    "count": 80
+   }
+  },
+  "cube": {
+   "easy": {
+    "file": "pools/cube-easy.json",
+    "count": 80
+   },
+   "medium": {
+    "file": "pools/cube-medium.json",
+    "count": 80
+   },
+   "hard": {
+    "file": "pools/cube-hard.json",
+    "count": 80
+   }
+  }
+ },
+ "daily_files": "daily/{yyyy}-{mm}.json",
+ "puzzles": 3254
+}

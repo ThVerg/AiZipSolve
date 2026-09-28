@@ -4,7 +4,10 @@
 
 Endpoints (JSON):
     GET  /api/models
-    POST /api/generate     {kind, size, num_checkpoints?, unique?, seed?, options?}
+    POST /api/generate     {kind, size, num_checkpoints?, unique?, seed?, options?, bank?}
+        bank = "<mode>-<diff>" (e.g. "classic-hard"): pick pool[seed % len] from the curated
+        bank (static/bank/, scripts/build_bank.py) when it exists, else generate as usual.
+        Responses carry "rating" {label, score} (the human difficulty, zipsolve.difficulty).
     POST /api/check        {puzzle, path}
     POST /api/solve/exact  {puzzle, time_limit?, start_path?}
     POST /api/solve/rl     {puzzle, model?, mode: greedy|search|hybrid, budget?, start_path?, time_limit?,
@@ -17,7 +20,8 @@ Endpoints (JSON):
         the GNN's view of a position: legal-move probabilities, value / "winnable"
         estimate, board-wide score heat, and the solver's completable verdict.
     GET  /api/presets      difficulty presets (easy .. insane)
-    GET  /api/daily        ?difficulty=&date=YYYY-MM-DD  deterministic daily puzzle
+    GET  /api/daily        ?difficulty=&date=YYYY-MM-DD  deterministic daily puzzle: from the bank's
+                           daily schedule (easy/medium/hard/special) when present, else generated
     ("trace": true on /api/solve/exact and /api/solve/rl search|hybrid returns the
     search's push/pop events for the "watch it think" visualisation.)
 Pages: / (the casual game), /lab (the AI show: watch the robots think, robot vs robot),
@@ -45,6 +49,7 @@ from starlette.concurrency import run_in_threadpool
 
 from ..puzzle import Puzzle
 from .. import solver as _solver
+from .bank import Bank, seed_of
 from .engine import (RL_MODES, ModelRegistry, complete_prefix, hint, policy_view, rl_solve, traced_exact,
                      validate_prefix)
 
@@ -76,6 +81,8 @@ PRESETS: dict[str, dict] = {
                "blurb": "4×4×4 cube"},
 }
 DAILY_EPOCH = _dt.date(2026, 1, 1)   # Daily #1
+MODE_KIND = {"classic": "grid2d", "walls": "walls", "islands": "islands", "cube": "grid3d"}
+RATE_MAX_NODES = 150                 # rate generated puzzles up to this size (bank ones are pre-rated)
 
 
 class GenerateReq(BaseModel):
@@ -87,6 +94,7 @@ class GenerateReq(BaseModel):
     options: dict[str, Any] = Field(default_factory=dict)
     time_limit: float = 15.0
     include_solution: bool = False
+    bank: str | None = None           # "<mode>-<diff>": serve from the curated bank when available
 
 
 class PuzzleReq(BaseModel):
@@ -177,8 +185,25 @@ def _check_puzzle_dict(d) -> None:
         raise HTTPException(422, "puzzle.meta must be an object")
 
 
-def create_app(checkpoint_dir: str | Path | None = None) -> FastAPI:
+def _rating(p: Puzzle) -> dict | None:
+    """Human difficulty of a generated puzzle (None when too big or unsolved)."""
+    if p.num_nodes > RATE_MAX_NODES or p.solution is None:
+        return None
+    try:
+        from ..difficulty import rate
+        r = rate(p, time_limit=1.5)
+    except Exception:  # noqa: BLE001  (the rating is decoration: never fail a request over it)
+        return None
+    return {"label": r["label"], "score": r["score"]}
+
+
+def _bank_rating(e: dict) -> dict:
+    return {"label": e.get("label"), "score": e.get("score"), "mode": e.get("mode"), "diff": e.get("diff")}
+
+
+def create_app(checkpoint_dir: str | Path | None = None, bank_dir: str | Path | None = None) -> FastAPI:
     app = FastAPI(title="Zip puzzles", version="0.1")
+    bank = Bank(bank_dir or os.environ.get("ZIPSOLVE_BANK") or STATIC / "bank")
     ckdir = Path(checkpoint_dir or os.environ.get("ZIPSOLVE_CHECKPOINTS") or ROOT / "checkpoints")
     registry = ModelRegistry(ckdir)
     store: OrderedDict[str, list[int] | None] = OrderedDict()   # puzzle id -> solution
@@ -208,11 +233,21 @@ def create_app(checkpoint_dir: str | Path | None = None) -> FastAPI:
 
     daily_cache: OrderedDict[tuple[str, str], dict] = OrderedDict()
 
-    def _generate(kind, size, ncp, seed, unique, kw, tl):
+    def _generate(kind, size, ncp, seed, unique, kw, tl, rated=False):
         from ..generator import make_puzzle
         t0 = time.perf_counter()
         p = make_puzzle(kind, size, num_checkpoints=ncp, rng=seed, unique=unique, time_limit=tl, **kw)
-        return p, time.perf_counter() - t0
+        secs = time.perf_counter() - t0
+        if rated:
+            return p, secs, (_rating(p) if unique else None)
+        return p, secs
+
+    def from_bank(e: dict, seed: int) -> tuple[dict, list | None]:
+        d = dict(e["puzzle"])
+        sol = d.pop("solution", None)
+        return {"id": remember(sol), "seed": seed, "kind": MODE_KIND.get(e.get("mode"), d.get("kind")),
+                "size": e.get("size"), "unique": True, "num_nodes": len(d["coords"]), "seconds": 0.0,
+                "puzzle": d, "rating": _bank_rating(e), "bank_id": e.get("id"), "source": "bank"}, sol
 
     def load_model_or_http(name):
         try:
@@ -227,9 +262,27 @@ def create_app(checkpoint_dir: str | Path | None = None) -> FastAPI:
     def models():
         return {"directory": str(ckdir), "models": registry.list()}
 
+    @app.get("/api/bank")
+    def bank_info():
+        idx = bank.index
+        if not idx:
+            return {"available": False}
+        return {"available": True, "generated": idx.get("generated"), "daily_start": idx.get("daily_start"),
+                "daily_end": idx.get("daily_end"),
+                "modes": {m: {d: v.get("count") for d, v in ds.items()} for m, ds in idx.get("modes", {}).items()}}
+
     @app.post("/api/generate")
     async def generate(req: GenerateReq):
         from ..generator import GenerationTimeout, make_puzzle
+        if req.bank and "-" in req.bank:
+            mode, _, diff = req.bank.partition("-")
+            bseed = req.seed if req.seed is not None and req.seed >= 0 else secrets.randbelow(10**9)
+            e = bank.pick(mode, diff, bseed)
+            if e is not None:
+                out, sol = from_bank(e, bseed)
+                if req.include_solution:
+                    out["solution"] = sol
+                return out
         if req.kind not in SIZE_LIMITS:
             raise HTTPException(400, f"unknown kind {req.kind!r}")
         lo, hi, _ = SIZE_LIMITS[req.kind]
@@ -264,7 +317,7 @@ def create_app(checkpoint_dir: str | Path | None = None) -> FastAPI:
         tl = _clamp(req.time_limit, 1.0, 60.0)
 
         try:
-            p, secs = await run_in_threadpool(_generate, req.kind, size, ncp, seed, req.unique, kw, tl)
+            p, secs, rating = await run_in_threadpool(_generate, req.kind, size, ncp, seed, req.unique, kw, tl, True)
         except GenerationTimeout as e:
             raise HTTPException(422, f"{e}. Try a longer time limit, fewer islands/cells, "
                                      f"or turn off 'unique solution'.")
@@ -274,7 +327,7 @@ def create_app(checkpoint_dir: str | Path | None = None) -> FastAPI:
         sol = d.pop("solution")
         pid = remember(sol)
         out = {"id": pid, "seed": seed, "kind": req.kind, "size": size, "unique": req.unique,
-               "num_nodes": p.num_nodes, "seconds": secs, "puzzle": d}
+               "num_nodes": p.num_nodes, "seconds": secs, "puzzle": d, "rating": rating, "source": "generator"}
         if req.include_solution:
             out["solution"] = sol
         return out
@@ -354,30 +407,38 @@ def create_app(checkpoint_dir: str | Path | None = None) -> FastAPI:
 
     @app.get("/api/daily")
     async def daily(difficulty: str = "medium", date: str | None = None):
-        if difficulty not in PRESETS:
-            raise HTTPException(400, "difficulty must be one of " + ", ".join(PRESETS))
+        if difficulty not in PRESETS and difficulty != "special":
+            raise HTTPException(400, "difficulty must be one of " + ", ".join([*PRESETS, "special"]))
         try:
             day = _dt.date.fromisoformat(date) if date else _dt.date.today()
         except ValueError:
             raise HTTPException(422, "date must be YYYY-MM-DD")
         key = (day.isoformat(), difficulty)
+        number = (day - DAILY_EPOCH).days + 1
+        label = PRESETS[difficulty]["label"] if difficulty in PRESETS else "Special"
+        got = bank.daily(day, difficulty) if difficulty in ("easy", "medium", "hard", "special") else None
+        if got is not None:   # the curated schedule (same puzzle as the static site)
+            e, _num = got
+            out, _ = from_bank(e, seed_of(e))
+            out["daily"] = {"date": key[0], "number": number, "difficulty": difficulty, "label": label}
+            return out
         with store_lock:
             hit = daily_cache.get(key)
         if hit is None:
-            pr = PRESETS[difficulty]
+            pr = PRESETS[difficulty if difficulty in PRESETS else "expert"]
             seed = int.from_bytes(hashlib.sha256(f"zip-daily:{key[0]}:{difficulty}".encode()).digest()[:4],
                                   "big") % 10**9
             try:
-                p, secs = await run_in_threadpool(_generate, pr["kind"], pr["size"], None, seed, pr["unique"],
-                                                  dict(pr["options"]), 30.0)
+                p, secs, rating = await run_in_threadpool(_generate, pr["kind"], pr["size"], None, seed,
+                                                          pr["unique"], dict(pr["options"]), 30.0, True)
             except Exception as e:  # noqa: BLE001
                 raise HTTPException(422, f"could not generate the daily puzzle: {e}")
             d = p.to_dict()
             sol = d.pop("solution")
             hit = {"seed": seed, "kind": pr["kind"], "size": pr["size"], "unique": pr["unique"],
                    "num_nodes": p.num_nodes, "seconds": secs, "puzzle": d, "solution": sol,
-                   "daily": {"date": key[0], "number": (day - DAILY_EPOCH).days + 1,
-                             "difficulty": difficulty, "label": pr["label"]}}
+                   "rating": rating, "source": "generator",
+                   "daily": {"date": key[0], "number": number, "difficulty": difficulty, "label": label}}
             with store_lock:
                 daily_cache[key] = hit
                 while len(daily_cache) > 64:

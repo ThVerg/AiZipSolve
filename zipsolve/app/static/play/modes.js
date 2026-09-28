@@ -4,15 +4,17 @@ import { outlineLoops, offsetLoop, roundedPath } from "./board.js";
 
 export const MODES = {
   classic: { label: "Classic", dflt: "medium", diffs: {
-    easy: { label: "Easy", kind: "grid2d", size: 5, unique: true },
-    medium: { label: "Medium", kind: "grid2d", size: 7, unique: true },
-    hard: { label: "Hard", kind: "grid2d", size: 9, unique: true } } },
-  walls: { label: "Walls", dflt: "normal", diffs: { normal: { label: "Walls", kind: "walls", size: 7, unique: true, options: { walls_frac: 0.35 } } } },
-  islands: { label: "Islands", dflt: "normal", diffs: { normal: { label: "Islands", kind: "islands", size: 4, unique: true } } },
-  cube: { label: "3D Cube", dflt: "normal", diffs: { normal: { label: "4×4×4", kind: "grid3d", size: 4, unique: false } } },
+    easy: { label: "Easy", kind: "grid2d", size: 5, unique: true, bank: "classic-easy" },
+    medium: { label: "Medium", kind: "grid2d", size: 7, unique: true, bank: "classic-medium" },
+    hard: { label: "Hard", kind: "grid2d", size: 9, unique: true, bank: "classic-hard" } } },
+  walls: { label: "Walls", dflt: "normal", diffs: { normal: { label: "Walls", kind: "walls", size: 7, unique: true, options: { walls_frac: 0.35 }, bank: "walls-medium" } } },
+  islands: { label: "Islands", dflt: "normal", diffs: { normal: { label: "Islands", kind: "islands", size: 4, unique: true, bank: "islands-medium" } } },
+  cube: { label: "3D Cube", dflt: "normal", diffs: { normal: { label: "4×4×4", kind: "grid3d", size: 4, unique: false, bank: "cube-hard" } } },
 };
-// /api/generate body for a mode difficulty (the game and the show must agree, so "Can you beat it?" hands over the same puzzle)
-export function genParams(p, seed) { return { kind: p.kind, size: p.size, unique: !!p.unique, options: p.options || {}, seed: seed ?? null, time_limit: 20 }; }
+// /api/generate body for a mode difficulty (the game and the show must agree, so "Can you beat it?" hands over the same puzzle).
+// `bank` names the curated pool (static/bank/, "<mode>-<diff>"): the server (and the static site) serve pool[seed % count]
+// from it, with its human difficulty rating; without a bank the server generates kind/size as before.
+export function genParams(p, seed) { return { kind: p.kind, size: p.size, unique: !!p.unique, options: p.options || {}, seed: seed ?? null, time_limit: 20, bank: p.bank || null }; }
 
 // the robots of "Race the robot" (game) and the AI show
 export const ROBOTS = [

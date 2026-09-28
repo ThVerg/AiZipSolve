@@ -53,9 +53,10 @@
   <button type="button" class="mi" data-act="sound"><span class="mi-ic" id="miSoundIc">🔊</span><span id="miSoundTxt">Sound on</span></button>
   <button type="button" class="mi" data-act="theme"><span class="mi-ic">🌗</span>Light / dark</button>
   <hr>
-  <button type="button" class="mi" data-act="nerd"><span class="mi-ic">⚙️</span>Nerd mode</button>
-  <a class="mi" href="/editor"><span class="mi-ic">✏️</span>Puzzle editor</a>
-  <a class="mi" href="/dashboard"><span class="mi-ic">📈</span>Training dashboard</a>
+  <button type="button" class="mi" data-act="nerd" data-local-only><span class="mi-ic">⚙️</span>Nerd mode</button>
+  <a class="mi" href="/editor" data-local-only><span class="mi-ic">✏️</span>Puzzle editor</a>
+  <a class="mi" href="/dashboard" data-local-only><span class="mi-ic">📈</span>Training dashboard</a>
+  <a class="mi" data-static-only hidden href="https://github.com/ThVerg/AiZipSolve#run-locally" target="_blank" rel="noopener"><span class="mi-ic">💻</span>Editor &amp; AI workbench: run locally</a>
 </nav>
 
 <main id="main">
@@ -116,7 +117,7 @@
       <span class="vs-go" aria-hidden="true">›</span>
     </article>
 
-    <details class="nerd" id="nerd">
+    <details class="nerd" id="nerd" data-local-only>
       <summary><span class="nerd-ic" aria-hidden="true">⚙️</span>Nerd mode</summary>
       <div class="nerd-body" id="nerdBody"></div>
     </details>

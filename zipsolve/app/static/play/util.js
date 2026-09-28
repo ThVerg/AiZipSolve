@@ -50,7 +50,20 @@ export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 export const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
 export const reducedMotion = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
 
+// Online (static) build: set by scripts/build_site.py. No server there: api() answers from the puzzle bank
+// (play/static_api.js) and page links point at the built .html files.
+export const STATIC = typeof window !== "undefined" && !!window.ZIP_STATIC;
+export const PAGES = STATIC ? { home: "./", lab: "lab.html" } : { home: "/", lab: "/lab" };
+if (STATIC && typeof document !== "undefined") {
+  const flip = () => {
+    document.querySelectorAll("[data-local-only]").forEach((e) => { e.hidden = true; });
+    document.querySelectorAll("[data-static-only]").forEach((e) => { e.hidden = false; });
+  };
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", flip); else flip();
+}
+
 export async function api(url, body, { signal } = {}) {
+  if (STATIC) return (await import("./static_api.js")).staticApi(url, body);
   const opt = body === undefined ? { signal } : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal };
   const r = await fetch(url, opt);
   let j = null;
