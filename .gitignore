@@ -9,9 +9,9 @@ __pycache__/
 /outputs/
 /data/
 checkpoints/*
-!checkpoints/zip_gnn_small.pt
+!checkpoints/zip_gnn.pt
 *.pt
-!checkpoints/zip_gnn_small.pt
+!checkpoints/zip_gnn.pt
 
 # user content / local state
 puzzles/custom/

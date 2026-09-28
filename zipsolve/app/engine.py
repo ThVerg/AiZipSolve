@@ -202,6 +202,9 @@ def hint(puzzle: Puzzle, path: Sequence[int], solution: Sequence[int] | None = N
 # ---------------------------------------------------------------------------
 # RL agent
 # ---------------------------------------------------------------------------
+SHIPPED_MODEL = "zip_gnn.pt"
+
+
 class ModelRegistry:
     """Lists checkpoints under a directory (recursively: e.g. ``remote/host/x.pt``
     mirrored from a training server) and caches loaded models (keyed by mtime).
@@ -262,10 +265,12 @@ class ModelRegistry:
                 meta = cached[2]
                 info.update({k: meta.get(k) for k in ("stage", "iteration", "global_step")})
             out.append(info)
-        # preferred default: a local (top-level) *final* / *latest* / *best*, else the newest local file
+        # default: the shipped model checkpoints/zip_gnn.pt (the robots' brain); otherwise a
+        # local (top-level) *final* / *latest* / *best*, else the newest local file
         local = [m for m in out if not m["group"]] or out
+        shipped = [m for m in local if m["name"] == SHIPPED_MODEL]
         pref = [m for m in local if any(t in m["file"] for t in ("final", "latest", "best"))]
-        default = (pref or local or [None])[0]
+        default = (shipped or pref or local or [None])[0]
         for m in out:
             m["default"] = m is default
         return out

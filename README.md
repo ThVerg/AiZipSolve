@@ -63,7 +63,7 @@ Frozen validation set (240 puzzles, 16 families, 1 s budget):
 | GNN, best of 8 samples | 96% |
 | GNN-guided solver search | 99% |
 
-A small pretrained model ships in `checkpoints/zip_gnn_small.pt`.
+The best model (DAgger, 89% greedy on the test set) ships in `checkpoints/zip_gnn.pt`; the game's robots use it by default.
 
 ```bash
 python -m zipsolve.rl.imitation generate --n 2000 --workers 8 --label-all --out data/ds.pkl

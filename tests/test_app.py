@@ -460,3 +460,19 @@ def test_models_in_subfolders(tmp_path):
     assert r.status_code == 200 and r.json()["model"] == "remote/host/m_latest.pt"
     r = c.post("/api/solve/rl", json={"puzzle": P, "model": "remote/host/m_latest.pt"})
     assert r.status_code == 200 and r.json()["model"] == "remote/host/m_latest.pt"
+
+
+def test_shipped_model_is_default(tmp_path):
+    """checkpoints/zip_gnn.pt (the robots' brain) wins over newer *_final/*_latest files."""
+    import os
+    import time as _t
+    from zipsolve.app.engine import ModelRegistry
+    for name in ("zip_gnn.pt", "run_final.pt", "run_latest.pt"):
+        (tmp_path / name).write_bytes(b"x")
+    later = _t.time() + 100
+    os.utime(tmp_path / "run_final.pt", (later, later))
+    models = ModelRegistry(tmp_path).list()
+    assert [m["name"] for m in models if m["default"]] == ["zip_gnn.pt"]
+    (tmp_path / "zip_gnn.pt").unlink()
+    models = ModelRegistry(tmp_path).list()
+    assert [m["name"] for m in models if m["default"]] == ["run_final.pt"]
