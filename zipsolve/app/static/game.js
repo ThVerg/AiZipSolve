@@ -90,6 +90,7 @@ function showScreen(name) {
 function stopEverything() {
   G.animTok++; G.animating = false;
   if (game) game.locked = false;
+  document.body.classList.remove("robot-on");
   endRace();
   closeSheet();
   coach("");
@@ -536,15 +537,18 @@ async function getHint() {
   try {
     if (G.P.coop) return await coopHint(tok, rev);
     // the Detective explains the move when it can (a short sentence); the plain hint stays the authority
-    const ex = api("/api/hint/explain", { puzzle: G.data, path: game.path, id: G.id, time_limit: 2 }).catch(() => null);
-    const r = await api("/api/hint", { puzzle: G.data, path: game.path, id: G.id });
+    // fog: the hint may only use the numbers this board shows (fog_seen)
+    const fogSeen = G.P.fog && board.fogShown ? { fog_seen: board.fogShown() } : {};
+    const ex = api("/api/hint/explain", { puzzle: G.data, path: game.path, id: G.id, time_limit: 2, ...fogSeen }).catch(() => null);
+    const r = await api("/api/hint", { puzzle: G.data, path: game.path, id: G.id, ...fogSeen });
     const e = r.status === "next" && !r.reason ? await Promise.race([ex, sleep(2500).then(() => null)]) : null;
     if (e && e.reason && e.move === r.next) r.reason = e.reason;
     if (tok !== G.animTok || rev !== game.rev) return;
     if (r.status === "next") {
       G.hints++; G.hint = { node: r.next }; sound.hint();
       // the Detective's reason, when the server has one ("This corner only has one way out")
-      coach(r.reason ? `💡 ${esc(shortReason(r.reason))}` : "Try the glowing square ✨", r.reason ? 4200 : 2600);
+      if (r.fog && r.certain === false) coach(`🌫️ ${esc(shortReason(r.reason))}`, 4600);   // the fog hides too much: say so
+      else coach(r.reason ? `💡 ${esc(shortReason(r.reason))}` : "Try the glowing square ✨", r.reason ? 4200 : 2600);
     } else if (r.status === "backtrack") {
       G.hints++;
       G.animating = true;
@@ -624,6 +628,7 @@ async function showMe() {
   coach(`<span class="bot-ic">🤖</span> Let me show you…`);
   updateHud();
   if (G.P.coop) return showMeCoop(tok);
+  if (G.P.fog) return showMeFog(tok);
   const full = await solveFull();
   if (tok !== G.animTok) return;
   if (!full) {
@@ -647,6 +652,71 @@ async function showMe() {
   }
   G.animating = false;
   document.body.classList.remove("robot-on");
+}
+
+// fog of war: the robot only knows the numbers it has seen. The server (or the static bank) sends its run: moves,
+// back-ups when a newly seen number spoils the plan, {"t":"reveal"} events and captions; replay it on the board.
+async function fogRun() {
+  const seen = board.fogShown ? board.fogShown() : [];
+  const path = game.path;
+  for (const body of [{ start_path: path.length > 1 ? path : null, time_limit: 20 }, { start_path: null, time_limit: 40 }]) {
+    try { const r = await api("/api/solve/exact", { puzzle: G.data, trace: true, fog_seen: seen, ...body }); if (r.solved && r.path) return r; } catch { /* retry */ }
+    if (path.length <= 1) break;
+  }
+  return null;
+}
+async function showMeFog(tok) {
+  const off = () => { G.animating = false; game.locked = false; document.body.classList.remove("robot-on"); };
+  coach(`<span class="bot-ic">🔦</span> I can only see numbers close to my pen… let me feel my way.`);
+  const r = await fogRun();
+  if (tok !== G.animTok) return;
+  if (!r) { off(); coach("Even the robot is lost in the fog 🤔", 2600); updateHud(); return; }
+  G.assisted = true;
+  sound.robot();
+  const lcp = (a, b) => { let k = 0; while (k < a.length && k < b.length && a[k] === b[k]) k++; return k; };
+  const full = r.path;
+  // replay: every event is a target line; the board follows it one cell at a time (the fog lifts as the pen moves)
+  let stack = [], started = false;
+  const moves = (r.trace || []).filter((e) => typeof e === "number" && e >= 0).length;
+  const dt = clamp(3200 / Math.max(1, moves), 55, 170);
+  let pending = null;   // a caption to show with the next move
+  const sync = async () => {
+    const k = Math.max(1, lcp(game.path, stack));
+    while (game.path.length > k) { game.truncate(game.path.length - 1); sound.undo(); await sleep(dt * 0.7); if (tok !== G.animTok) return false; }
+    for (let i = game.path.length; i < stack.length; i++) {
+      if (tok !== G.animTok) return false;
+      if (i === full.length - 1 && stack.length === full.length) off();   // the last move completes the puzzle (win sheet)
+      if (!game.push(stack[i])) return false;
+      await sleep(dt);
+    }
+    return true;
+  };
+  const say = async (e) => {
+    const warn = e.kind === "backtrack" || e.kind === "replan";
+    coach(`<span class="bot-ic">🔦</span> ${esc(e.msg)}`, 0, warn ? "warn" : "");
+    await sleep(clamp(String(e.msg).length * 38, 900, warn ? 2600 : 1900));
+  };
+  for (const e of r.trace || [full]) {
+    if (tok !== G.animTok) return;
+    if (e === "R") { stack = []; started = false; continue; }
+    if (typeof e === "number") {
+      if (e >= 0) stack.push(e); else stack.splice(stack.length + e);
+      if (!started && stack.length && game.path.length && stack[0] === game.path[0] && e >= 0 && lcp(game.path, stack) === stack.length) continue;
+      started = true;
+      if (!(await sync())) return;
+      continue;
+    }
+    if (!e || typeof e !== "object") continue;
+    if (e.t === "path" && Array.isArray(e.p)) { stack = e.p.slice(); started = true; if (!(await sync())) return; }
+    else if (e.t === "reveal" && board.revealFog) { board.revealFog(e.nodes || [], true); }
+    else if (e.t === "note" && e.msg && e.kind !== "done" && e.kind !== "intro") { started = true; if (!(await sync())) return; await say(e); }
+    if (tok !== G.animTok) return;
+  }
+  stack = full.slice();
+  if (!(await sync())) return;
+  off();
+  coach("");
+  updateHud();
 }
 
 async function showMeCoop(tok) {

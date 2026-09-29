@@ -16,6 +16,12 @@ Extend an existing build to 10M unique puzzles (fresh seeds, dedup against it,
 sizes weighted by cell count so small boards don't run out of distinct puzzles):
     python scripts/build_hf_dataset.py --n 9500000 --weight nodes --index-offset 10000000 \
         --existing hf_dataset/data --target-total 10000000 --tag x1 --out hf_dataset_x1
+The newer puzzle types (portals, torus, hex, tri, oneway, overpass, keys, cubesurf,
+coop) are built with --set more; --set unique builds a subset of puzzles proven to
+have exactly one solution, across all families, with a human difficulty rating:
+    python scripts/build_hf_dataset.py --set more --n 10500000 --weight nodes \
+        --existing hf_dataset_10m/data --target-total 20000000 --out hf_dataset_more
+    python scripts/build_hf_dataset.py --set unique --n 210000 --target-total 200000 --out hf_dataset_unique
 Layout:
     <out>/data/<split>/<family>-<shard>.parquet   (split = train / validation / test)
     <out>/stats.json
@@ -43,36 +49,126 @@ FAMILIES = {  # family -> (sizes, share of the dataset)
     "grid3d": (list(range(3, 7)), 0.15),
     "grid4d": (list(range(2, 5)), 0.09),
 }
+# newer puzzle types (see generator.make_puzzle / zipsolve.coop)
+FAMILIES_MORE = {
+    "portals": (list(range(5, 13)), 0.12),
+    "torus": (list(range(4, 11)), 0.11),
+    "hex": (list(range(3, 8)), 0.11),
+    "tri": (list(range(2, 7)), 0.11),
+    "oneway": (list(range(5, 13)), 0.11),
+    "overpass": (list(range(5, 13)), 0.11),
+    "keys": (list(range(5, 13)), 0.11),
+    "cubesurf": (list(range(2, 6)), 0.11),
+    "coop": (list(range(4, 11)), 0.11),
+}
+# unique-solution subset: sizes kept moderate so uniqueness can be proven quickly
+FAMILIES_UNIQUE = {
+    "grid2d": (list(range(5, 10)), 0.10), "walls": (list(range(5, 10)), 0.07),
+    "mask": (list(range(6, 10)), 0.06), "islands": (list(range(2, 7)), 0.07),
+    "islands_chain": ([2, 3], 0.03), "grid3d": ([3], 0.05), "grid4d": ([2, 3], 0.04),
+    "portals": (list(range(5, 10)), 0.06), "torus": (list(range(4, 8)), 0.06),
+    "hex": (list(range(3, 6)), 0.06), "tri": (list(range(2, 5)), 0.06),
+    "oneway": (list(range(5, 10)), 0.06), "overpass": (list(range(5, 10)), 0.06),
+    "keys": (list(range(5, 10)), 0.06), "cubesurf": ([2, 3], 0.05), "coop": (list(range(4, 8)), 0.05),
+}
+ALL_FAMILIES = list(FAMILIES) + list(FAMILIES_MORE)   # index = seed stream (main indices unchanged)
+SETS = {"main": FAMILIES, "more": FAMILIES_MORE, "unique": FAMILIES_UNIQUE}
+SEED_TAGS = {"main": 7777, "more": 7777, "unique": 8888}
 DENSITY = {"sparse": 0.6, "default": 1.0, "dense": 1.6}
 SEED_TAG = 7777  # keeps the dataset's random streams apart from training / benchmark seeds
 
 
-def canonical_hash(coords, edges, checkpoints) -> str:
+def canonical_hash(coords, edges, checkpoints, extra=None) -> str:
+    """Content id. `extra` (arcs, precedence, second path's checkpoints, overpass nodes …)
+    is hashed too so puzzles that differ only in those rules get different ids; without
+    it the id is identical to the original 10M build's."""
     h = hashlib.sha1()
     h.update(np.asarray(coords, dtype=np.int32).tobytes())
     h.update(np.asarray(sorted(tuple(sorted(e)) for e in edges), dtype=np.int32).tobytes())
     h.update(np.asarray(checkpoints, dtype=np.int32).tobytes())
+    if extra:
+        h.update(json.dumps(extra, sort_keys=True).encode())
     return h.hexdigest()[:16]
 
 
 def approx_nodes(family: str, size: int) -> float:
     return {"grid2d": size ** 2, "walls": size ** 2, "mask": 0.75 * size ** 2, "islands": 14.0 * size,
-            "islands_chain": 12.0 * size, "grid3d": size ** 3, "grid4d": size ** 4}[family]
+            "islands_chain": 12.0 * size, "grid3d": size ** 3, "grid4d": size ** 4,
+            "portals": size ** 2, "torus": size ** 2, "hex": 3 * size * size - 3 * size + 1,
+            "tri": 6 * size * size, "oneway": size ** 2, "overpass": size ** 2 + size, "keys": size ** 2,
+            "cubesurf": 6 * size * size, "coop": size ** 2}[family]
 
 
 def size_label(family: str, size: int) -> str:
     if family in ("islands", "islands_chain"):
         return f"{size} islands"
+    if family == "hex":
+        return f"hexagon side {size}"
+    if family == "tri":
+        return f"triangles side {size}"
+    if family == "cubesurf":
+        return f"cube surface {size}x{size}x{size}"
     dim = {"grid3d": 3, "grid4d": 4}.get(family, 2)
     return "x".join([str(size)] * dim)
 
 
-def make_row(family: str, size: int, index: int, solver_time: float) -> dict | None:
+_EXTRA_META = ("portals", "torus", "wrap_edges", "overpass", "keys", "face", "cubesurf")
+
+
+def _row_common(family, size, index, seed, density, g, checkpoints, solution, status, nodes, ms,
+                extra=None, checkpoints2=None, solution2=None, rating=None, unique=None):
+    coords = g.coords.astype(int).tolist()
+    edges = [list(e) for e in g.edges()]
+    meta = g.meta
+    arcs = [list(map(int, a)) for a in meta.get("arcs", [])]
+    prec = [list(map(int, a)) for a in meta.get("precedence", [])]
+    ex = {k: meta[k] for k in _EXTRA_META if k in meta}
+    lay = meta.get("layout")
+    if lay is not None and not isinstance(lay, str):   # islands use meta.layout for their island grid
+        ex["island_layout"] = list(lay)
+        lay = None
+    hash_extra = {k: v for k, v in (("arcs", arcs), ("precedence", prec), ("cp2", checkpoints2),
+                                     ("overpass", ex.get("overpass"))) if v}
+    return {
+        "id": canonical_hash(coords, edges, checkpoints, hash_extra or None),
+        "family": family,
+        "size": size_label(family, size),
+        "dim": int(g.dim),
+        "num_nodes": int(g.num_nodes),
+        "num_edges": len(edges),
+        "num_checkpoints": len(checkpoints) + len(checkpoints2 or []),
+        "density": density,
+        "coords": coords,
+        "edges": edges,
+        "checkpoints": [int(c) for c in checkpoints],
+        "solution": [int(v) for v in solution],
+        "walls": [list(map(int, w)) for w in meta.get("walls", [])],
+        "bridges": [list(map(int, b)) for b in meta.get("bridges", [])],
+        "island": [int(i) for i in meta["island"]] if "island" in meta else None,
+        "solver_status": status,
+        "solver_nodes": int(nodes),
+        "solver_ms": round(ms, 3),
+        "seed": seed,
+        "layout": lay or "square",
+        "arcs": arcs,
+        "precedence": prec,
+        "extras": json.dumps(ex, default=int, separators=(",", ":")) if ex else None,
+        "checkpoints2": [int(c) for c in checkpoints2] if checkpoints2 else None,
+        "solution2": [int(v) for v in solution2] if solution2 else None,
+        "unique": unique,
+        "rating_score": None if rating is None else float(rating["score"]),
+        "rating_label": None if rating is None else rating["label"],
+    }
+
+
+def make_row(family: str, size: int, index: int, solver_time: float, which: str = "main") -> dict | None:
     from zipsolve.generator import GenerationTimeout, default_num_checkpoints, make_puzzle
     from zipsolve.solver import solve
 
-    fam_id = list(FAMILIES).index(family)
-    seed = int(np.random.SeedSequence([SEED_TAG, fam_id, size, index]).generate_state(1, np.uint32)[0])
+    fam_id = ALL_FAMILIES.index(family)
+    seed = int(np.random.SeedSequence([SEED_TAGS[which], fam_id, size, index]).generate_state(1, np.uint32)[0])
+    if which != "main" or family in FAMILIES_MORE:
+        return _make_row_v2(family, size, index, seed, solver_time, unique=(which == "unique"))
     rng = np.random.default_rng(seed)
     density = ["sparse", "default", "dense"][index % 3]
     try:
@@ -117,11 +213,88 @@ def make_row(family: str, size: int, index: int, solver_time: float) -> dict | N
     }
 
 
+def _make_row_v2(family, size, index, seed, solver_time, unique):
+    """Rows for the newer kinds, and for the unique subset (any kind)."""
+    from zipsolve.generator import GenerationTimeout, default_num_checkpoints, make_puzzle
+    rng = np.random.default_rng(seed)
+    density = "default" if unique else ["sparse", "default", "dense"][index % 3]
+    k = default_num_checkpoints(int(approx_nodes(family, size)), rng)
+    k = int(max(2, round(k * DENSITY[density])))
+    tl = 30.0 if unique else 20.0
+    if family == "coop":
+        from zipsolve import coop
+        base = coop.BASES[index % len(coop.BASES)]
+        try:
+            cp = coop.make_coop(size, num_checkpoints=None if unique else max(4, k), rng=rng, unique=unique,
+                                base=base, time_limit=tl)
+        except (GenerationTimeout, ValueError):
+            return None
+        sol = cp.solution
+        if sol is None or coop.check(cp, sol) is not None:
+            return None
+        t0 = time.perf_counter()
+        r = coop.solve(cp, time_limit=solver_time)
+        ms = (time.perf_counter() - t0) * 1000
+        rating, is_unique = None, None
+        if unique:
+            if coop.count_solutions(cp, 2, time_limit=30.0) != (1, "complete"):
+                return None
+            rating, is_unique = coop.rate(cp), True
+        g = cp.graph
+        g.meta.setdefault("layout", "hex" if base == "hex" else "square")
+        return _row_common(family, size, index, seed, density, g, cp.checkpoints[0], sol[0], r.status,
+                           r.nodes_expanded, ms, checkpoints2=cp.checkpoints[1], solution2=sol[1],
+                           rating=rating, unique=is_unique)
+    from zipsolve.solver import count_solutions, solve
+    try:
+        p = make_puzzle(family, size, num_checkpoints=None if unique else k, rng=rng, unique=unique,
+                        time_limit=tl)
+    except (GenerationTimeout, ValueError):
+        return None
+    if p.solution is None or p.check_solution(p.solution) is not None:
+        return None
+    t0 = time.perf_counter()
+    r = solve(p, time_limit=solver_time)
+    ms = (time.perf_counter() - t0) * 1000
+    rating, is_unique = None, None
+    if unique:
+        if count_solutions(p, 2, time_limit=30.0) != (1, "complete"):
+            return None
+        from zipsolve.difficulty import rate
+        try:
+            rating = rate(p, p.solution, time_limit=10.0)
+        except Exception:  # noqa: BLE001 - a rating failure should not drop a proven-unique puzzle
+            rating = None
+        is_unique = True
+    return _row_common(family, size, index, seed, density, p.graph, p.checkpoints, p.solution,
+                       r.status, r.nodes_expanded, ms, rating=rating, unique=is_unique)
+
+
+def dataset_schema():
+    """Parquet schema (v2). Columns after `split` are null for kinds that don't use them."""
+    import pyarrow as pa
+    i32, pairs = pa.int32(), pa.list_(pa.list_(pa.int32()))
+    return pa.schema([
+        ("id", pa.string()), ("family", pa.string()), ("size", pa.string()), ("dim", pa.int8()),
+        ("num_nodes", pa.int32()), ("num_edges", pa.int32()), ("num_checkpoints", pa.int32()),
+        ("density", pa.string()), ("coords", pa.list_(pa.list_(pa.int16()))), ("edges", pairs),
+        ("checkpoints", pa.list_(i32)), ("solution", pa.list_(i32)), ("walls", pairs),
+        ("bridges", pairs), ("island", pa.list_(pa.int16())), ("solver_status", pa.string()),
+        ("solver_nodes", pa.int64()), ("solver_ms", pa.float32()), ("seed", pa.int64()),
+        ("split", pa.string()),
+        # v2: newer puzzle types, co-op and the unique subset
+        ("layout", pa.string()), ("arcs", pairs), ("precedence", pairs), ("extras", pa.string()),
+        ("checkpoints2", pa.list_(i32)), ("solution2", pa.list_(i32)), ("unique", pa.bool_()),
+        ("rating_score", pa.float32()), ("rating_label", pa.string()),
+    ])
+
+
 def work(task):
     family, size, start, count, solver_time = task[:5]
+    which = task[5] if len(task) > 5 else "main"
     rows = []
     for i in range(start, start + count):
-        row = make_row(family, size, i, solver_time)
+        row = make_row(family, size, i, solver_time, which)
         if row is not None:
             rows.append(row)
     return family, rows
@@ -164,21 +337,14 @@ def main(argv=None):
     ap.add_argument("--target-total", type=int, default=0,
                     help="stop once existing + new unique rows reach this (0 = run all tasks)")
     ap.add_argument("--tag", default="", help="shard name tag, e.g. x1 -> grid2d-x1-00000.parquet")
+    ap.add_argument("--set", choices=list(SETS), default="main",
+                    help="main: original families; more: newer puzzle types; unique: proven-unique subset")
     args = ap.parse_args(argv)
 
     import pyarrow as pa
     import pyarrow.parquet as pq
 
-    i32, pairs = pa.int32(), pa.list_(pa.list_(pa.int32()))
-    schema = pa.schema([
-        ("id", pa.string()), ("family", pa.string()), ("size", pa.string()), ("dim", pa.int8()),
-        ("num_nodes", pa.int32()), ("num_edges", pa.int32()), ("num_checkpoints", pa.int32()),
-        ("density", pa.string()), ("coords", pa.list_(pa.list_(pa.int16()))), ("edges", pairs),
-        ("checkpoints", pa.list_(i32)), ("solution", pa.list_(i32)), ("walls", pairs),
-        ("bridges", pairs), ("island", pa.list_(pa.int16())), ("solver_status", pa.string()),
-        ("solver_nodes", pa.int64()), ("solver_ms", pa.float32()), ("seed", pa.int64()),
-        ("split", pa.string()),
-    ])
+    schema = dataset_schema()
 
     root = Path(__file__).resolve().parents[1]
     out = Path(args.out)
@@ -194,13 +360,13 @@ def main(argv=None):
         print(f"deduplicating against {len(existing)} existing puzzles", flush=True)
 
     tasks = []
-    for fam, (sizes, share) in FAMILIES.items():
+    for fam, (sizes, share) in SETS[args.set].items():
         w = [approx_nodes(fam, s) if args.weight == "nodes" else 1.0 for s in sizes]
         for s, ws in zip(sizes, w):
             per_size = math.ceil(args.n * share * ws / sum(w))
             for start in range(0, per_size, args.chunk):
                 tasks.append((fam, s, args.index_offset + start, min(args.chunk, per_size - start),
-                              args.solver_time))
+                              args.solver_time, args.set))
     # random order, so stopping at --target-total keeps the family / size mix balanced
     np.random.default_rng(SEED_TAG).shuffle(tasks)
     total = sum(t[3] for t in tasks)

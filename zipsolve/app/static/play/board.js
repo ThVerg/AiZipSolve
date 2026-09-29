@@ -823,9 +823,19 @@ export class Board {
       this.fogEls.set(v, { cg, g });
     }
   }
-  updateFog(heads, animate) {
+  // fog replays: put every cloud back (a fresh run of a recorded robot)
+  resetFog() {
+    if (!this.P || !this.P.fog || !this.svg) return;
+    if (this.fogEls) for (const [, f] of this.fogEls) f.cg.remove();
+    this._fogMem = null;
+    this.drawFog();
+  }
+  // fog replays: reveal these checkpoints now (a robot's {"t":"reveal"} event), animated like the head rule
+  revealFog(nodes, animate = true) { this.updateFog([], animate, new Set(nodes)); }
+  fogShown() { return this._fogShown ? [...this._fogShown] : []; }
+  updateFog(heads, animate, extra = null) {
     if (!this.fogEls) return;
-    const vis = new Set();
+    const vis = extra || new Set();
     for (const hd of heads) for (const v of near(this.P, hd, 2)) vis.add(v);
     for (const [v, f] of this.fogEls) {
       if (!vis.has(v)) continue;

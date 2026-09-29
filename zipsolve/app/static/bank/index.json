@@ -215,5 +215,12 @@
    "sat"
   ],
   "generated": "2026-09-28T16:42:50+00:00"
+ },
+ "fog": {
+  "pools": [
+   "classic-medium"
+  ],
+  "dir": "fog",
+  "count": 80
  }
 }

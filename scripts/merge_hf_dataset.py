@@ -11,12 +11,24 @@ Output: <out>/data/<split>/<family>-<nnnnn>.parquet (zstd, ≤ --shard-rows rows
 from __future__ import annotations
 
 import argparse
+import sys
 from collections import defaultdict
 from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
+
+
+def to_schema(t: pa.Table, schema: pa.Schema) -> pa.Table:
+    """Add any missing (v2) columns as nulls and order/cast to `schema`."""
+    cols = []
+    for field in schema:
+        if field.name in t.column_names:
+            cols.append(t.column(field.name).cast(field.type))
+        else:
+            cols.append(pa.nulls(t.num_rows, type=field.type))
+    return pa.Table.from_arrays(cols, schema=schema)
 
 
 def split_of(pid: str) -> str:
@@ -30,6 +42,9 @@ def main(argv=None):
     ap.add_argument("--out", required=True)
     ap.add_argument("--shard-rows", type=int, default=200_000)
     args = ap.parse_args(argv)
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from build_hf_dataset import dataset_schema
+    schema = dataset_schema()
     out = Path(args.out) / "data"
     writers: dict = {}
     counts: dict = defaultdict(int)
@@ -50,7 +65,7 @@ def main(argv=None):
 
     for part in args.parts:
         for f in sorted(Path(part).rglob("*.parquet")):
-            t = pq.read_table(f)
+            t = to_schema(pq.read_table(f), schema)
             splits = pa.array([split_of(i) for i in t.column("id").to_pylist()])
             t = t.set_column(t.schema.get_field_index("split"), "split", splits)
             for fam in pc.unique(t.column("family")).to_pylist():

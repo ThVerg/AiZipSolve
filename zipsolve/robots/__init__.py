@@ -20,13 +20,16 @@ id             robot
 ``sat``        🧮 Mathematician: SAT encoding solved by CaDiCaL (optional
                dependency ``python-sat``)
 =============  =========================================================
+
+Fog puzzles (``meta.fog``) are always played by the fair fog planner
+(:mod:`zipsolve.robots.fog`): it only uses the numbers the player could see.
 """
 from __future__ import annotations
 
 from typing import Callable
 
 from ..puzzle import Puzzle
-from . import detective, evolver, gambler, mathematician, sage
+from . import detective, evolver, fog, gambler, mathematician, sage
 from .detective import explain_next_move
 
 ROBOTS: dict[str, dict] = {
@@ -62,8 +65,16 @@ def listing() -> list[dict]:
             for k, v in ROBOTS.items()]
 
 
-def run_robot(name: str, puzzle: Puzzle, time_limit: float = 10.0, trace: bool = True, seed: int = 0) -> dict:
+def run_robot(name: str, puzzle: Puzzle, time_limit: float = 10.0, trace: bool = True, seed: int = 0,
+              fog_seen=None) -> dict:
     key = resolve(name)
+    if fog.is_fog(puzzle):
+        # fog of war: every robot plays fair - it only knows the numbers it has seen (zipsolve.robots.fog)
+        out = fog.run(puzzle, time_limit=time_limit, trace=trace, seed=seed, seen=fog_seen, robot=key)
+        out["robot"] = key
+        out["robot_name"] = ROBOTS[key]["name"]
+        out["emoji"] = ROBOTS[key]["emoji"]
+        return out
     fn: Callable = ROBOTS[key]["run"]
     out = fn(puzzle, time_limit=time_limit, trace=trace, seed=seed)
     out["robot"] = key

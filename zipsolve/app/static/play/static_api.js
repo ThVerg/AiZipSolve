@@ -7,6 +7,8 @@
 //   robots/<id>.json                {rookie, scout, grandmaster, tortoise, + detective, mcts, evolver, gambler,
 //                                   sat where recorded}: /api/solve/* and /api/solve/robot runs
 //   architect/weekly.json           {"YYYY-Www": entry}: the Architect's weekly challenge
+//   fog/<id>.json                   a fair fog-of-war run (scripts/build_fog_runs.py): fog mode's "Show me" and
+//                                   robots replay it; hints and runs from a started line use play/fog.js
 // New puzzle kinds (portals, torus, hex, tri, oneway, overpass, keys, cubesurf) and co-op have their own pools
 // ("<mode>-medium" / "-hard"); co-op entries keep their two unique paths under meta.coop.solution.
 // Hints and "Show me" use the stored solution (the bank's puzzles have exactly one, so a path that leaves it
@@ -14,6 +16,8 @@
 // The Detective's teaching hints come from its recorded run; the Architect "designs" by picking from its
 // pools. The AI's "vision" (/api/policy) and everything local-only (editor, custom puzzles, workbench,
 // dashboard) answer 501.
+
+import { fogAdvice, fogExplain, fogRun, near } from "./fog.js";
 
 const BANK = new URL("../bank/", import.meta.url);
 const files = new Map();
@@ -112,7 +116,9 @@ async function generate(body = {}) {
   const seed = Number.isInteger(body.seed) && body.seed >= 0 ? body.seed : Math.floor(Math.random() * 1e9);
   const entry = list[seed % list.length];
   remember(entry);
-  return describe(entry, seed);
+  const out = describe(entry, seed);
+  if (body.fog) out.puzzle.meta = { ...(out.puzzle.meta || {}), fog: true };   // fog of war (any kind)
+  return out;
 }
 
 // ------------------------------------------------------------------ daily
@@ -208,10 +214,11 @@ async function solutionOf(puzzle, id) {
 }
 const lcp = (a, b) => { let k = 0; while (k < a.length && k < b.length && a[k] === b[k]) k++; return k; };
 
-async function hint({ puzzle, path = [], id }) {
+async function hint({ puzzle, path = [], id, fog_seen: seen }) {
   path = path.length ? path : [puzzle.checkpoints[0]];
   const bad = validatePrefix(puzzle, path);
   if (bad) return { status: "invalid", message: bad };
+  if (isFog(puzzle)) return fogAdvice(puzzle, path, seen || null, 1500);   // only what the player can see
   if (path.length === puzzle.coords.length) return { status: "done", message: "Already solved!" };
   const sol = await solutionOf(puzzle, id);
   if (!sol) return { status: "timeout", message: "No hint for this puzzle." };
@@ -221,6 +228,29 @@ async function hint({ puzzle, path = [], id }) {
   const keep = Math.max(1, k);
   return { status: "backtrack", keep, next: sol[keep], source: "solution", nodes_expanded: 0, seconds: 0,
     message: `Your path can't be completed - backtrack to step ${keep}.` };
+}
+
+// ------------------------------------------------------------------ fog of war (meta.fog): fair robots
+// Nothing may use the stored solution: fresh runs replay the recorded fog run, anything from a started line (and
+// every hint) runs the fog planner in the browser (play/fog.js) on what the player's board shows (fog_seen).
+const isFog = (d) => !!(d && d.meta && d.meta.fog);
+async function fogRecorded(puzzle, id) {
+  const e = await lookup(puzzle, id);
+  if (e) { try { const r = clone(await bank(`fog/${e.id}.json`)); return { robot: "fog", start_len: 1, trace_truncated: false, nodes_expanded: 0, fog: true, ...r, steps: r.path.slice(1).map((node) => ({ node, p: null })) }; } catch { /* not recorded */ } }
+  return fogRun(puzzle, null, null, 8000, e && e.puzzle.solution);
+}
+async function fogSolve(body) {
+  const { puzzle, start_path: start, fog_seen: seen, id } = body;
+  if (start && start.length > 1) {
+    const bad = validatePrefix(puzzle, start);
+    if (bad) throw httpError(400, `start_path: ${bad}`);
+  }
+  // a fresh start (only the 1 and what is within 2 steps of it is showing): the recorded run fits exactly
+  const around = near(graphOf(puzzle).adj.map((a) => [...a]), puzzle.checkpoints[0]);
+  const fresh = !(start && start.length > 1) && !(seen && seen.some((c) => !around.has(c)));
+  if (fresh) return fogRecorded(puzzle, id);
+  const e = await lookup(puzzle, id);
+  return fogRun(puzzle, start, seen || null, 8000, e && e.puzzle.solution);
 }
 
 // ------------------------------------------------------------------ co-op (two paths; mirror of zipsolve.coop rules)
@@ -320,6 +350,10 @@ async function solveRobot(body) {
   const meta = STRAT.find((b) => b.id === key);
   if (!meta) throw httpError(400, `unknown robot ${body.robot}`);
   if (body.puzzle && body.puzzle.kind === "coop") return { robot: key, robot_name: meta.name, emoji: meta.emoji, status: "unsupported", solved: false, path: [], steps: [], trace: null, reason: "co-op puzzles are for humans" };
+  if (isFog(body.puzzle)) {   // fog: every robot plays fair (the recorded fog run, in its own name)
+    const f = await fogSolve(body);
+    return { ...f, robot: key, robot_name: meta.name, emoji: meta.emoji };
+  }
   let r;
   try { r = await robotRun(body.puzzle, key, body.id); }
   catch (e) { throw httpError(404, `${meta.name} hasn't studied this puzzle online - try another one (or the local app)`); }
@@ -354,7 +388,13 @@ async function detectiveReasons(e) {
   return out;
 }
 const TECH = { rules: "Rules", L1: "Local dead end", L2: "Regions", LA1: "Short lookahead", L3: "Expert rule", LA2: "Deeper lookahead" };
-async function explain({ puzzle, path = [], id }) {
+async function explain({ puzzle, path = [], id, fog_seen: seen }) {
+  if (isFog(puzzle)) {
+    path = path.length ? path : [puzzle.checkpoints[0]];
+    const bad = validatePrefix(puzzle, path);
+    if (bad) return { status: "invalid", move: null, reason: `That line breaks a rule: ${bad}.`, fog: true };
+    return fogExplain(puzzle, path, seen || null, 1500);
+  }
   const e = await lookup(puzzle, id);
   if (!e || !e.puzzle.solution) throw httpError(404, "no explanation for this puzzle");
   path = path.length ? path : [puzzle.checkpoints[0]];
@@ -422,6 +462,7 @@ async function solveExact(body) {
     return paths ? { status: "solved", paths: paths.map((p) => p.slice()), path: null, solved: true, nodes_expanded: 0, seconds: 0, kind: "coop" }
       : { status: "timeout", paths: null, path: null, solved: false, nodes_expanded: 0, seconds: 0, kind: "coop" };
   }
+  if (isFog(puzzle)) return fogSolve(body);
   if (body.trace && !(start && start.length > 1)) {
     try { return await robotRun(puzzle, "tortoise"); } catch { /* fall back to the stored solution */ }
   }
@@ -437,6 +478,7 @@ async function solveExact(body) {
 async function solveRL(body) {
   const bot = MODE_BOT[body.mode];
   if (!bot || bot === "tortoise") throw httpError(400, "mode must be one of greedy, search, hybrid");
+  if (isFog(body.puzzle)) return { ...(await fogSolve(body)), mode: body.mode, model: "fog", model_stage: null };
   if (body.start_path && body.start_path.length > 1) throw httpError(501, "the online robots start from checkpoint 1");
   const r = await robotRun(body.puzzle, bot);
   r.model = "robot"; r.model_stage = null;

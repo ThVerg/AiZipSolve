@@ -61,6 +61,7 @@ from starlette.concurrency import run_in_threadpool
 from ..puzzle import Puzzle
 from .. import solver as _solver
 from .bank import Bank, seed_of
+from ..robots import fog as _fog
 from .engine import (RL_MODES, ModelRegistry, complete_prefix, hint, policy_view, rl_solve, traced_exact,
                      validate_prefix)
 
@@ -119,6 +120,7 @@ class GenerateReq(BaseModel):
 class PuzzleReq(BaseModel):
     puzzle: dict
     id: str | None = None
+    fog_seen: list[int] | None = None   # fog puzzles: checkpoints the player's board already shows
 
 
 class CheckReq(PuzzleReq):
@@ -180,6 +182,15 @@ class ArchitectReq(BaseModel):                 # POST /api/architect/design (zip
 
 # kind -> (min size, max size) for the Architect endpoint (islands: number of islands)
 ARCHITECT_SIZES = {"classic": (5, 10), "grid2d": (5, 10), "walls": (5, 10), "islands": (3, 8)}
+
+
+def fog_run(p: Puzzle, time_limit: float, trace: bool, start_path=None, seen=None, robot: str = "fog") -> dict:
+    """A fair fog-of-war run (zipsolve.robots.fog) in the solver/robot response shape."""
+    # the trace (discovery, reveals, back-ups) is the point of a fog run: always recorded
+    out = _fog.run(p, time_limit=time_limit, trace=True, start_path=start_path, seen=seen, robot=robot)
+    out["start_len"] = len(start_path) if start_path else 1
+    out["attempts"] = 1
+    return out
 
 
 def _clamp(x, lo, hi):
@@ -439,6 +450,8 @@ def create_app(checkpoint_dir: str | Path | None = None, bank_dir: str | Path | 
             bad = validate_prefix(p, req.start_path)
             if bad is not None:
                 raise HTTPException(400, f"start_path: {bad}")
+        if _fog.is_fog(p):   # fog of war: "Show me" discovers the numbers like a player would
+            return await run_in_threadpool(fog_run, p, tl, req.trace, req.start_path, req.fog_seen)
         if req.trace:
             r = await run_in_threadpool(traced_exact, p, req.start_path, tl)
             r["solved"] = r["status"] == "solved"
@@ -458,6 +471,15 @@ def create_app(checkpoint_dir: str | Path | None = None, bank_dir: str | Path | 
         p = load_puzzle(req.puzzle)
         if req.mode not in RL_MODES:
             raise HTTPException(400, "mode must be one of " + ", ".join(RL_MODES))
+        if _fog.is_fog(p):   # fog of war: the robots play fair (only the numbers they have seen)
+            if req.start_path:
+                bad = validate_prefix(p, req.start_path)
+                if bad is not None:
+                    raise HTTPException(400, f"start_path: {bad}")
+            out = await run_in_threadpool(fog_run, p, _clamp(req.time_limit, 0.5, 60.0), req.trace, req.start_path,
+                                          req.fog_seen, f"rl-{req.mode}")
+            out.update({"mode": req.mode, "model": "fog", "model_stage": None})
+            return out
         model, meta, name = await run_in_threadpool(load_model_or_http, req.model)
         budget = _clamp(int(req.budget), 1, 200_000)
         tl = _clamp(req.time_limit, 0.5, 60.0)
@@ -484,12 +506,14 @@ def create_app(checkpoint_dir: str | Path | None = None, bank_dir: str | Path | 
             raise HTTPException(400, str(e.args[0]))
         p = load_puzzle(req.puzzle)
         tl = _clamp(req.time_limit, 0.2, 60.0)
-        return await run_in_threadpool(_robots.run_robot, key, p, tl, req.trace, int(req.seed))
+        return await run_in_threadpool(_robots.run_robot, key, p, tl, req.trace, int(req.seed), req.fog_seen)
 
     @app.post("/api/hint/explain")
     async def explain_hint(req: ExplainReq):   # the Detective's teaching hint: {status, move, reason, ...}
         from .. import robots as _robots
         p = load_puzzle(req.puzzle)
+        if _fog.is_fog(p):   # only what the player can see (never the stored solution)
+            return await run_in_threadpool(_fog.fog_explain, p, req.path, req.fog_seen, _clamp(req.time_limit, 0.5, 20.0))
         sol = store.get(req.id) if req.id else None
         if sol is not None and not p.is_valid_solution(sol):
             sol = None
@@ -508,10 +532,12 @@ def create_app(checkpoint_dir: str | Path | None = None, bank_dir: str | Path | 
             return await run_in_threadpool(_coop.hint, cp, req.paths if req.paths is not None else [req.path, []],
                                            sol, _clamp(req.time_limit, 0.5, 20.0), req.path_index)
         p = load_puzzle(req.puzzle)
+        tl = _clamp(req.time_limit, 0.5, 20.0)
+        if _fog.is_fog(p):   # only what the player can see (never the stored solution)
+            return await run_in_threadpool(_fog.fog_hint, p, req.path, req.fog_seen, tl)
         sol = store.get(req.id) if req.id else None
         if sol is not None and not p.is_valid_solution(sol):
             sol = None
-        tl = _clamp(req.time_limit, 0.5, 20.0)
         return await run_in_threadpool(hint, p, req.path, sol, tl)
 
     @app.post("/api/policy")

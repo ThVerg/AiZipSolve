@@ -251,6 +251,7 @@ function buildTicks(res, P) {
         if (e.t === "note" && e.msg) ticks.push({ t: "note", msg: e.msg, kind: e.kind || "", cells: e.cells || null });
         else if (e.t === "path" && Array.isArray(e.p)) ticks.push({ t: "set", p: e.p });
         else if (e.t === "tree") ticks.push({ t: "tree", ev: e });
+        else if (e.t === "reveal" && Array.isArray(e.nodes)) ticks.push({ t: "reveal", nodes: e.nodes });   // fog lifts
         continue;
       }
       if (e === "R") { if (!first) ticks.push({ t: "reset" }); first = false; continue; }
@@ -304,6 +305,9 @@ class Lane {
       this.onEvent("gen", { n: this.gens, len: p.length });
     } else if (t.t === "tree") {
       if (!quiet) this.onEvent("tree", t.ev);
+    } else if (t.t === "reveal") {
+      // fog runs: numbers appear exactly when the robot's pen gets close (it only plans with what it has seen)
+      if (this.board && this.board.revealFog) this.board.revealFog(t.nodes, !quiet);
     } else if (t.t === "reset") {
       for (const v of this.stack.slice(1)) { this.onStack[v] = 0; this.tried[v] = 0.7; }
       this.stack = [P.cps[0]]; this.reached = 1; this.resets++; this.sincePop = 0;
@@ -465,9 +469,12 @@ function avatarClass(bot) { return bot.challenger ? "av-ch" : `av-${bot.id}`; }
 // ------------------------------------------------------------------ WATCH
 async function openStage(req, { push = false, autostart = false, bot = null } = {}) {
   stopAll();
+  const seq = S.stageSeq = (S.stageSeq || 0) + 1;   // a newer New / pick wins; late puzzles are dropped
   let pz;
   try { pz = await fetchPuzzle(req); }
-  catch (e) { toast(`Couldn't load a puzzle: ${e.message}`); return; }
+  catch (e) { if (seq === S.stageSeq) toast(`Couldn't load a puzzle: ${e.message}`); return; }
+  if (seq !== S.stageSeq) return;
+  stopAll();
   setPuzzle(pz);
   if (S.P.coop) { toast("Co-op is for humans 👯 Pick another puzzle!"); goPick(null); return; }
   // default star: the Scout (it backs out of dead ends: the best show); on 3D the Grandmaster (never gives up)
@@ -485,8 +492,8 @@ async function openStage(req, { push = false, autostart = false, bot = null } = 
   setDeck("pre");
   paintBot();
   layoutStage();
-  solveFor(botById(S.bot)).catch(() => {});   // think ahead: the replay starts at once
-  if (autostart) setTimeout(() => watch(), 350);
+  // no robot request until Watch is pressed (or the hero's "watch a robot" autostart)
+  if (autostart) setTimeout(() => { if (seq === S.stageSeq && S.puzzle === pz && !S.watch) watch(); }, 350);
 }
 function paintBot() {
   const bot = botById(S.bot);
@@ -520,6 +527,7 @@ function resetBoard() {
   hideTree();
   if (!board || !board.svg) return;
   clearGlow(board);
+  if (board.resetFog) board.resetFog();   // fog: every replay starts with the clouds back on
   board.render({ path: [S.P.cps[0]], legal: [], animate: false });
 }
 function layoutStage() {
@@ -838,7 +846,7 @@ async function race() {
   S.speed = 1; setSpeedUI(1);
   fDeck("run");
   const us = [lanesUI.A, lanesUI.B];
-  us.forEach((u) => { u.lane = null; u.host.classList.remove("winner", "loser"); u.board.render({ path: [P.cps[0]], legal: [], animate: false }); laneSay(u, "warming up…", "thinking", true); });
+  us.forEach((u) => { u.lane = null; u.host.classList.remove("winner", "loser"); if (u.board.resetFog) u.board.resetFog(); u.board.render({ path: [P.cps[0]], legal: [], animate: false }); laneSay(u, "warming up…", "thinking", true); });
   let results;
   try { results = await Promise.all(us.map((u) => solveFor(u.bot).catch((e) => ({ error: e })))); }
   catch { results = []; }
@@ -1176,7 +1184,8 @@ async function init() {
 
   $("watchBtn").onclick = () => watch();
   $("againBtn").onclick = () => { resetBoard(); paintBot(); setDeck("pre"); $("watchBtn").focus({ preventScroll: true }); };
-  $("newBtn").onclick = () => { const s = S.puzzle.src; openStage(s.type === "mode" ? { type: "mode", mode: s.mode, diff: s.diff } : { type: "mode", mode: "surprise" }, { push: false, autostart: true }); };
+  // New = a fresh board with the robot waiting: it never starts on its own (press Watch)
+  $("newBtn").onclick = () => { const s = S.puzzle.src; openStage(s.type === "mode" ? { type: "mode", mode: s.mode, diff: s.diff } : { type: "mode", mode: "surprise" }, { push: false }); };
   $("vsBtn").onclick = () => { const b = S.bot; S.vs = [b === "rookie" ? "grandmaster" : "rookie", b]; if (S.vs[0] === S.vs[1]) S.vs[0] = "tortoise"; openFaceoff(null, { push: true }); };
   $("raceBtn").onclick = () => race();
   $("rematchBtn").onclick = () => { const s = S.puzzle.src; openFaceoff(s.type === "mode" ? { type: "mode", mode: s.mode, diff: s.diff } : { type: "mode", mode: "surprise" }).then(() => race()); };
