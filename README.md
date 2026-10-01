@@ -91,17 +91,21 @@ python -m zipsolve.rl.benchmark run --ckpt checkpoints/ft_best.pt --set val
 ## Dataset
 
 **[FAVERG/zip-puzzles](https://huggingface.co/datasets/FAVERG/zip-puzzles)** on Hugging Face:
-**10 million** unique, solvable puzzles with solutions across every family (2D 4–12, walls, masks,
-organic islands, 3D up to 6³, 4D up to 4⁴), with exact-solver difficulty stats and 90 / 5 / 5
-train / validation / test splits (1.6 GB of Parquet).
+**20 million** unique, solvable puzzles across all **16 puzzle types** — 2D grids, walls, masks, organic
+islands, island chains, 3D cubes, 4D hypercubes, portals, wraparound, hex, triangles, one-way arrows,
+overpasses, keys & doors, cube surfaces and two-path co-op — with exact-solver difficulty stats and
+unbiased 90 / 5 / 5 train / validation / test splits, plus a **`unique` config of 200,000 puzzles proven
+to have exactly one solution**, each with a human-style difficulty rating (Easy → Insane).
 
 ```python
 from datasets import load_dataset
-ds = load_dataset("FAVERG/zip-puzzles", "islands")
+ds = load_dataset("FAVERG/zip-puzzles", "islands")      # one puzzle type
+unique = load_dataset("FAVERG/zip-puzzles", "unique")   # proven-unique, human-rated
 ```
 
-Rebuild it with `python scripts/build_hf_dataset.py --n 1000000 --workers 48`; larger builds can be
-extended in parts (`--existing … --target-total 10000000`) and merged with `scripts/merge_hf_dataset.py`.
+Rebuild it with `python scripts/build_hf_dataset.py` (`--set main|more|unique`); big builds can be run in
+parts (`--existing … --target-total N`) and merged with `scripts/merge_hf_dataset.py`, which deduplicates,
+thins any surplus uniformly and assigns the splits.
 
 ## Tests
 

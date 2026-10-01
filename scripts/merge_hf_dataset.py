@@ -1,9 +1,9 @@
 """Merge dataset build parts into one publishable layout with unbiased splits.
 
-Splits are a pure function of the puzzle id: x = int(id[8:16], 16) % 100 →
-test (x < 5), validation (x < 10), train (rest). Using hash digits that played
-no part in any earlier selection keeps the splits an unbiased ~90/5/5 even when
-the parts were produced by interrupted runs.
+Splits are a pure function of the puzzle id: x = int(sha1(id)[8:16]) % 100 →
+test (x < 5), validation (x < 10), train (rest). That hash played no part in any
+earlier selection, so the splits are an unbiased ~90/5/5 even when the parts were
+produced by interrupted runs (which lose rows still buffered in memory).
 
     python scripts/merge_hf_dataset.py --parts hf_dataset/data hf_dataset_x1/data ... --out hf_dataset_10m
 Output: <out>/data/<split>/<family>-<nnnnn>.parquet (zstd, ≤ --shard-rows rows each)
@@ -31,8 +31,34 @@ def to_schema(t: pa.Table, schema: pa.Schema) -> pa.Table:
     return pa.Table.from_arrays(cols, schema=schema)
 
 
+def _thin_key(pid: str) -> int:
+    import hashlib
+    return int.from_bytes(hashlib.sha1(pid.encode()).digest()[:8], "big")
+
+
+def _thin_set(parts, keep_parts: int, limit: int) -> set[str]:
+    """Ids to drop so exactly `limit` unique rows remain: the thinnable ids with the smallest
+    hash keys (a uniform random sample, independent of split, family and file order)."""
+    fixed: set[str] = set()
+    for part in parts[:keep_parts]:
+        for f in Path(part).rglob("*.parquet"):
+            fixed.update(pq.read_table(f, columns=["id"]).column("id").to_pylist())
+    thin: set[str] = set()
+    for part in parts[keep_parts:]:
+        for f in Path(part).rglob("*.parquet"):
+            thin.update(i for i in pq.read_table(f, columns=["id"]).column("id").to_pylist() if i not in fixed)
+    excess = len(fixed) + len(thin) - limit
+    if excess <= 0:
+        return set()
+    return set(sorted(thin, key=_thin_key)[:excess])
+
+
 def split_of(pid: str) -> str:
-    x = int(pid[8:16], 16) % 100
+    """Split from bytes 8..16 of sha1(id): independent of the id's own digits and of the
+    thinning key (bytes 0..8), so the split stays an unbiased ~90/5/5 even when a build
+    lost rows (crashed or stopped builds lose rows still buffered in memory)."""
+    import hashlib
+    x = int.from_bytes(hashlib.sha1(pid.encode()).digest()[8:16], "big") % 100
     return "test" if x < 5 else "validation" if x < 10 else "train"
 
 
@@ -41,6 +67,11 @@ def main(argv=None):
     ap.add_argument("--parts", nargs="+", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--shard-rows", type=int, default=200_000)
+    ap.add_argument("--limit", type=int, default=0,
+                    help="cap the total unique rows; the surplus is dropped uniformly at random (by a hash "
+                         "of the id) from the parts after the first --keep-parts, so splits and the family "
+                         "mix stay unbiased (0 = keep all)")
+    ap.add_argument("--keep-parts", type=int, default=1, help="leading parts that are never thinned")
     args = ap.parse_args(argv)
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from build_hf_dataset import dataset_schema
@@ -50,6 +81,12 @@ def main(argv=None):
     counts: dict = defaultdict(int)
     shard: dict = defaultdict(int)
     seen = 0
+    ids: set[str] = set()   # parts built concurrently may overlap: keep the first copy of each id
+    dupes = 0
+    drop: set[str] = set()
+    if args.limit:
+        drop = _thin_set(args.parts, args.keep_parts, args.limit)
+        print(f"thinning: dropping {len(drop)} rows uniformly from parts {args.keep_parts}+", flush=True)
 
     def writer(split, fam, schema):
         key = (split, fam)
@@ -66,6 +103,17 @@ def main(argv=None):
     for part in args.parts:
         for f in sorted(Path(part).rglob("*.parquet")):
             t = to_schema(pq.read_table(f), schema)
+            keep = []
+            for k, i in enumerate(t.column("id").to_pylist()):
+                if i in ids or i in drop:
+                    dupes += i in ids
+                    continue
+                ids.add(i)
+                keep.append(k)
+            if len(keep) < t.num_rows:
+                t = t.take(pa.array(keep, type=pa.int64()))
+            if t.num_rows == 0:
+                continue
             splits = pa.array([split_of(i) for i in t.column("id").to_pylist()])
             t = t.set_column(t.schema.get_field_index("split"), "split", splits)
             for fam in pc.unique(t.column("family")).to_pylist():
@@ -84,7 +132,7 @@ def main(argv=None):
         print(f"{part}: done, {seen} rows so far", flush=True)
     for w in writers.values():
         w.close()
-    print("total", seen)
+    print("total", seen, "duplicates dropped", dupes)
 
 
 if __name__ == "__main__":

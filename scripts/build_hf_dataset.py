@@ -301,8 +301,11 @@ def work(task):
 
 
 def split_of(pid: str) -> str:
-    # hash digits 8..16: independent of anything used for selection (see merge_hf_dataset.py)
-    x = int(pid[8:16], 16) % 100
+    """Split from bytes 8..16 of sha1(id): independent of the id's own digits and of the
+    thinning key (bytes 0..8), so the split stays an unbiased ~90/5/5 even when a build
+    lost rows (crashed or stopped builds lose rows still buffered in memory)."""
+    import hashlib
+    x = int.from_bytes(hashlib.sha1(pid.encode()).digest()[8:16], "big") % 100
     return "test" if x < 5 else "validation" if x < 10 else "train"
 
 
